@@ -1,0 +1,175 @@
+# San Mateo County P25 Regional Communications System (Phase 1, 700 MHz).
+# Source: RadioReference trunked system database (sid 6919).
+#
+# p25, freq_mhz           a frequency used by any of the system's sites
+# tg, id, tag, description  a talkgroup; calls to others show as "Other"
+# Earlier talkgroups win when several are active at once.
+
+# Countywide Simulcast
+p25, 772.03125
+p25, 772.40625
+p25, 772.70625
+p25, 773.48125
+p25, 770.03125
+p25, 770.30625
+p25, 771.28125
+p25, 771.43125
+p25, 771.58125
+p25, 771.88125
+# Brisbane, Towne Ridge, Point Montara
+p25, 772.18125
+p25, 772.63125
+p25, 772.93125
+p25, 773.88125
+p25, 771.05625
+p25, 771.80625
+# Pigeon Point, La Honda
+p25, 771.35625
+p25, 772.25625
+p25, 773.96875
+p25, 774.63125
+p25, 769.34375
+p25, 769.10625
+# Pescadero
+p25, 772.10625
+p25, 772.78125
+p25, 773.40625
+p25, 774.70625
+p25, 769.30625
+
+tg, 865, SMC SO PatPri 1, Sheriff Patrol Primary 1 - South County
+tg, 866, SMC SO PatPri 2, Sheriff Patrol Primary 2 - North County / Coast
+tg, 709, SMC EMS Disp Red, EMS Dispatch (Red)
+tg, 914, SMC SO Civil, Sheriff Civil Enforcement Bureau Dispatch
+tg, 4058, SMC Probation, Probation
+tg, 867, SMC SO PatPri 3, Sheriff Patrol Backup
+tg, 868, SMC SO PatPri 4, Sheriff Patrol Backup
+tg, 869, SMC SO PatPri 5, Sheriff Patrol Backup
+tg, 870, SMC SO 6, Sheriff Channel 6
+tg, 871, SMC SO 7, Vehicle Theft Task Force 1
+tg, 872, SMC SO 8, Vehicle Theft Task Force 2
+tg, 873, SMC SO 9, Vehicle Theft Task Force 3
+tg, 874, SMC SO 10, Vehicle Theft Task Force 4
+tg, 875, SMC SO 11, Vehicle Theft Task Force 5
+tg, 876, SMC SO 12, Vehicle Theft Task Force 6
+tg, 877, SMC SO 13, Sheriff Channel 13
+tg, 878, SMC SO 14, Sheriff Channel 14
+tg, 879, SMC SO 15, Sheriff Channel 15
+tg, 880, SMC SO 16, Sheriff Channel 16
+tg, 609, SMC SO SAR, Sheriff Search and Rescue
+tg, 817, SMC SO Transit 1, Transit Police Bureau 1
+tg, 818, SMC SO Transit 2, Transit Police Bureau 2
+tg, 819, SMC SO Transit 3, Transit Police Bureau 3
+tg, 820, SMC SO Transit 4, Transit Police Bureau 4
+tg, 821, SMC SO Transit 5, Transit Police Bureau 5
+tg, 822, SMC SO Transit 6, Transit Police Bureau 6
+tg, 849, SMC SO NTF 1, Narcotics Task Force 1
+tg, 850, SMC SO NTF 2, Narcotics Task Force 2
+tg, 851, SMC SO NTF 3, Narcotics Task Force 3
+tg, 852, SMC SO NTF 4, Narcotics Task Force 4
+tg, 853, SMC SO NTF 5, Narcotics Task Force 5
+tg, 854, SMC SO NTF 6, Narcotics Task Force 6
+tg, 855, SMC SO NTF 7, Narcotics Task Force 7
+tg, 856, SMC SO NTF 8, Narcotics Task Force 8
+tg, 857, SMC SO NTF 9, Narcotics Task Force 9
+tg, 858, SMC SO NTF 10, Narcotics Task Force 10
+tg, 859, SMC SO NTF 11, Narcotics Task Force 11
+tg, 860, SMC SO NTF 12, Narcotics Task Force 12
+tg, 861, SMC SO NTF 13, Narcotics Task Force 13
+tg, 862, SMC SO NTF 14, Narcotics Task Force 14
+tg, 863, SMC SO NTF 15, Narcotics Task Force 15
+tg, 864, SMC SO NTF 16, Narcotics Task Force 16
+tg, 929, SMC SO Jail 1, Maguire Correctional Facility 1
+tg, 930, SMC SO Jail 2, Maguire Correctional Facility 2
+tg, 931, SMC SO Jail 3, Maguire Correctional Facility ERT
+tg, 932, SMC SO Jail 4, Jail 4
+tg, 933, SMC SO Jail 5, Jail 5
+tg, 934, SMC SO Jail 6, Jail 6
+tg, 935, SMC SO Jail 7, Jail 7
+tg, 936, SMC SO Jail 8, Jail 8 (Used for Traffic Control)
+tg, 937, SMC SO Jail 9, Maguire Correctional Facility 9
+tg, 938, SMC SO Jail 10, Womens Correction Center
+tg, 939, SMC SO Jail 11, Jail 11
+tg, 940, SMC SO Jail 12, Court Transportation 1
+tg, 941, SMC SO Jail 13, Court Transportation 2
+tg, 942, SMC SO Jail 14, Jail 14
+tg, 943, SMC SO Jail 15, Jail 15
+tg, 944, SMC SO Jail 16, Jail 16
+tg, 706, SMC EMS MCI 1, Mass Casualty Incident 1
+tg, 707, SMC EMS MCI 2, Mass Casualty Incident 2
+tg, 708, SMC EMS Tac Yel, EMS Tactical (Yellow)
+tg, 721, SMC EMS SFGH, San Francisco General Hospital
+tg, 722, SMC EMS Seton, Seton Medical Center
+tg, 723, SMC EMS KaiserSF, Kaiser SSF Medical Center
+tg, 724, SMC EMS PMC, Peninsula Medical Center
+tg, 725, SMC EMS MMC, Mills Medical Center
+tg, 726, SMC EMS SC, Seton Coastside
+tg, 727, SMC EMS SMCGH 1, SMC General Hospital 1
+tg, 728, SMC EMS SMCGH 2, SMC General Hospital 2
+tg, 729, SMC EMS SH, Sequoia Hospital
+tg, 730, SMC EMS KaiserRC, Kaiser Redwood City Medical Center
+tg, 731, SMC EMS Stanford, Stanford Med Center
+tg, 732, SMC EMS PA VA, Palo Alto Veterans Hospital
+tg, 897, SMC OES 1, Office of Emergency Services
+tg, 977, La Honda VFD1, La Honda Fire Brigade 1
+tg, 978, La Honda VFD2, La Honda Fire Brigade 2
+tg, 525, LAW COM 1, Law Common 1
+tg, 526, LAW COM 2, Law Common 2
+tg, 527, LAW COM 3, Law Common 3
+tg, 528, LAW COM 4, Law Common 4
+tg, 529, SYS COM 1, System Common 1
+tg, 530, SYS COM 2, System Common 2
+tg, 531, SYS COM 3, System Common 3
+tg, 532, SYS COM 4, System Common 4
+tg, 881, County 1, County 1
+tg, 882, County 2, County 2
+tg, 883, County 3, County 3
+tg, 884, County 4, County 4 (Hospital Security Delta One)
+tg, 885, County 5, County 5
+tg, 886, County 6, County 6 (Sheriff West Secondary)
+tg, 961, SMC COMM 1, County Common 1 (Election Dept)
+tg, 962, SMC COMM 2, County Common 2
+tg, 963, SMC COMM 3, County Common 3
+tg, 964, SMC COMM 4, County Common 4
+tg, 965, SMC COMM 5, County Common 5
+tg, 35601, SMC Interop 1, Interop 1
+tg, 35602, SMC Interop 2, Interop 2
+tg, 35603, SMC Interop 3, Interop 3
+tg, 35604, SMC Interop 4, Interop 4
+tg, 35605, SMC Interop 5, Interop 5
+tg, 35606, SMC Calling, Interop Calling
+tg, 4049, Daly City PD, Daly City Police (Testing Only)
+tg, 35619, San Bruno PD, San Bruno Police (Testing Only)
+tg, 769, SMC Coroner, Coroner 1 Dispatch
+tg, 533, SMC Parks 1, Parks North District
+tg, 534, SMC Parks 2, Parks South District
+tg, 535, SMC Parks 3, Parks West District
+tg, 536, SMC Parks 4, Parks Maintenance and Gardening
+tg, 537, SMC Parks 5, Parks Marine
+tg, 538, SMC Parks 6, Parks Ch 6
+tg, 539, SMC Parks 7, Parks Ch 7
+tg, 540, SMC Parks 8, Parks Ch 8
+tg, 561, SMC Building, Public Works Building Inspection
+tg, 625, SMC PW 1, Public Works 1
+tg, 627, SMC PW 2, Public Works 2
+tg, 628, SMC PW 3, Public Works 3 Roads
+tg, 629, SMC PW 4, Public Works 4 Airports
+tg, 630, SMC PW 5, Public Works 5
+tg, 631, SMC PW 6, Public Works 6 Surveys
+tg, 633, SMC PW 7, Public Works 7
+tg, 636, SMC PW 8, Public Works 8
+tg, 637, SMC PW 9, Public Works 9 County Control
+tg, 785, SMC Radio 1, County Radio Shop 1
+tg, 786, SMC Radio 2, County Radio Shop 2
+tg, 787, SMC Radio 3, County Radio Shop 3
+tg, 512, PHS Admin, Peninsula Humane Society Administration
+tg, 513, PHS 1, Peninsula Humane Society Primary
+tg, 514, PHS 2, Peninsula Humane Society Secondary
+tg, 515, PHS Rescue, Peninsula Humane Society Rescue
+tg, 516, PHS Tac, Peninsula Humane Society Tac / Cover Ops
+tg, 541, SamTrans 1, SamTrans Transit Trunking Ch 1
+tg, 542, SamTrans 2, SamTrans Transit Trunking Ch 2
+tg, 543, SamTrans 3, SamTrans Transit Trunking Ch 3
+tg, 544, SamTrans 4, SamTrans Transit Trunking Ch 4
+tg, 545, SamTrans 5, SamTrans Transit Trunking Ch 5
+tg, 546, SamTrans 6, SamTrans Transit Trunking Ch 6

@@ -1,0 +1,121 @@
+name: Release
+
+# Push a tag like v0.1.0 to build all platforms and publish a GitHub release.
+# Run it by hand (Actions > Release > Run workflow) to get the same builds as
+# downloadable artifacts without publishing anything.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # The official Windows build of libairspy, which the scanner loads at run
+  # time. Pinned by checksum.
+  AIRSPY_WIN_URL: https://github.com/airspy/airspyone_host/releases/download/v1.0.10/airspy_host_tools_win32_x86_x64_v1_0_10.zip
+  AIRSPY_WIN_SHA256: fcf1f0e10a8377a342162d0e7e929c1221b013573f80205544d681e1f9d4a551
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # An older Ubuntu, so the binaries run on older distributions too.
+          - name: linux-x86_64
+            os: ubuntu-22.04
+          - name: windows-x86_64
+            os: windows-latest
+          - name: macos-arm64
+            os: macos-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libfontconfig1-dev libfreetype-dev libxcb1-dev libx11-xcb-dev pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+
+      - name: Build
+        run: |
+          # Linux releases run on both Wayland and X11 desktops.
+          if [ "$RUNNER_OS" = Linux ]; then features="--features scanner-ui/x11"; fi
+          cargo build --release --locked -p scanner -p scanner-ui $features
+
+      - name: Stage files
+        run: |
+          name="airspy-scanner-${{ github.ref_type == 'tag' && github.ref_name || github.sha }}-${{ matrix.name }}"
+          echo "PACKAGE=$name" >> "$GITHUB_ENV"
+          mkdir -p "dist/$name"
+          ext=""; [ "$RUNNER_OS" = Windows ] && ext=".exe"
+          cp "target/release/scanner$ext" "target/release/scanner-ui$ext" "dist/$name/"
+          cp .github/release/README-${{ runner.os }}.txt "dist/$name/README.txt"
+
+      # Everything the programs need that Windows itself doesn't provide:
+      # libairspy with the libusb and pthreads libraries it uses, and the
+      # Visual C++ 2010 runtime that this pthreads build depends on. (The
+      # programs themselves are built with their C runtime linked in; see
+      # .cargo/config.toml.)
+      - name: Bundle libraries (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          curl -sSfL -o airspy.zip "$AIRSPY_WIN_URL"
+          echo "$AIRSPY_WIN_SHA256  airspy.zip" | sha256sum --check
+          7z x -y -oairspy airspy.zip > /dev/null
+          cp airspy/*/x64/airspy.dll airspy/*/x64/libusb-1.0.dll airspy/*/x64/pthreadVC2.dll "dist/$PACKAGE/"
+
+          system32="$(cygpath "$SYSTEMROOT")/System32"
+          if [ ! -f "$system32/msvcr100.dll" ]; then
+            choco install vcredist2010 --yes --no-progress
+          fi
+          cp "$system32/msvcr100.dll" "dist/$PACKAGE/"
+
+      - name: Archive
+        run: |
+          cd dist
+          if [ "$RUNNER_OS" = Windows ]; then
+            7z a -tzip "$PACKAGE.zip" "$PACKAGE" > /dev/null
+          else
+            tar -czf "$PACKAGE.tar.gz" "$PACKAGE"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PACKAGE }}
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true

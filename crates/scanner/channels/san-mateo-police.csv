@@ -1,0 +1,37 @@
+# San Mateo County law enforcement, UHF T-band analog FM.
+# Source: RadioReference county database (ctid 223).
+# freq_mhz, ctcss_hz, width (w = 5 kHz deviation, n = 2.5 kHz), tag, description
+# Earlier lines win when several channels are active at once.
+488.3125, 114.8, w, San Mateo PD1,    San Mateo Police Dispatch
+483.4125, 186.2, w, Redwood City PD1, Redwood City Police Dispatch
+488.9375, 162.2, w, Daly City PD1,    Daly City Police Dispatch
+488.4625, 114.8, w, S San Fran PD1,   South San Francisco Police Dispatch
+490.5375, 167.9, n, San Bruno PD1,    San Bruno Police Dispatch
+489.0875, 114.8, n, Burlingame PD1,   Burlingame Police Dispatch
+488.3375, 162.2, w, Menlo Park PD,    Menlo Park Police Dispatch
+488.3875, 114.8, w, E Palo Alto PD,   East Palo Alto Police Dispatch
+488.6125, 162.2, w, Foster City PD1,  Foster City Police Dispatch
+488.4875, 162.2, w, Belmont PD1,      Belmont Police Dispatch
+488.7375, 162.2, w, Pacifica PD,      Pacifica Police Dispatch
+489.0875, 162.2, w, Atherton PD,      Atherton Police Dispatch
+482.5000, 123.0, n, Brisbane PD,      Brisbane Police Dispatch
+482.5625, 114.8, w, Broadmoor PD1,    Broadmoor Police Dispatch
+490.9125, 167.9, n, Colma PD,         Colma Police Dispatch
+484.8625, 114.8, w, Hillsboro PD S,   Hillsborough Police South Repeater
+488.3375, 114.8, w, Hillsboro PD N,   Hillsborough Police North Repeater
+488.8875, 114.8, w, SMC Green,        Sheriff Green - Countywide
+488.8625, 114.8, w, SMC Tac 1 North,  Sheriff Tac 1 - North
+488.7125, 114.8, w, SMC Tac 2 Cent,   Sheriff Tac 2 - Central
+488.5375, 114.8, w, SMC Tac 3 South,  Sheriff Tac 3 - South
+482.9875, 114.8, w, San Mateo PD2,    San Mateo Police Secondary
+482.9125, 114.8, w, San Mateo PD3,    San Mateo Police Car-to-Car
+488.7875, 162.2, w, Redwood City PD2, Redwood City Police Secondary
+484.4875, 114.8, w, Redwood City PD3, Redwood City Police Tactical
+489.6125, 162.2, w, Daly City PD2,    Daly City Police Secondary
+490.5875, 114.8, w, S San Fran PD2,   South San Francisco Police Secondary
+489.3375, 114.8, w, S San Fran PD3,   South San Francisco Police Tactical
+488.7875, 114.8, n, San Bruno PD2,    San Bruno Police Car-to-Car
+489.5625, 114.8, n, Burlingame PD2,   Burlingame Police Secondary
+488.9375, 114.8, w, Foster City PD2,  Foster City Police Secondary
+483.0875, 162.2, w, Belmont PD2,      Belmont Police Secondary
+488.4875, 114.8, w, Broadmoor PD2,    Broadmoor Police Secondary

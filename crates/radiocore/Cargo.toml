@@ -1,0 +1,8 @@
+[package]
+name = "radiocore"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rustfft = "6"
+blip25-vocoder = { version = "1.0", default-features = false, features = ["decode"] }

@@ -1,0 +1,28 @@
+# San Mateo County Fire, VHF analog narrow FM.
+# Source: RadioReference county database (ctid 223).
+# freq_mhz, ctcss_hz, width (w = 5 kHz deviation, n = 2.5 kHz), tag, description
+# Earlier lines win when several channels are active at once.
+153.890, 114.8, n, SMCFD Control 1A, South Dispatch
+153.785, 156.7, n, SMCFD Control 2,  Central Dispatch
+154.100, 114.8, n, SMCFD Control 3,  North Dispatch
+154.340, 114.8, n, SMCFD Control 1B, Coast Dispatch (Half Moon Bay)
+154.145, 114.8, n, SMCFD Control 1C, Coast Dispatch (Pigeon Point)
+154.235, 114.8, n, SMCFD Control 1D, Coast Dispatch (La Honda)
+151.085, 114.8, n, SMCFD Control 1E, Coast Dispatch (Pescadero)
+154.370, 114.8, n, SMCFD Command 11, South Command
+153.950, 114.8, n, SMCFD Command 21, Central Command
+151.085, 123.0, n, SMCFD Command 31, North Command
+155.895, 114.8, n, SMCFD Command 41, Coast Command
+151.475, 167.9, n, SMCFD Command 51, County Command
+154.040, 118.8, n, SMCFD Tac 15,     South Tactical
+154.010, 110.9, n, SMCFD Tac 16,     South Tactical
+155.400, 141.3, n, SMCFD Tac 17,     South Tactical
+154.145, 118.8, n, SMCFD Tac 25,     Central Tactical
+153.830, 110.9, n, SMCFD Tac 26,     Central Tactical
+155.745, 162.2, n, SMCFD Tac 27,     Central Tactical
+154.010, 118.8, n, SMCFD Tac 35,     North Tactical
+154.040, 162.2, n, SMCFD Tac 36,     North Tactical
+155.400, 107.2, n, SMCFD Tac 37,     North Tactical
+153.830, 141.3, n, SMCFD Tac 45,     Coast Tactical
+154.445, 146.2, n, SMCFD Tac 46,     Coast Tactical
+155.745, 123.0, n, SMCFD Tac 47,     Coast Tactical

@@ -1,0 +1,3 @@
+[workspace]
+resolver = "2"
+members = ["crates/drivers/airspy", "crates/drivers/audio", "crates/radiocore", "crates/scanner", "crates/scanner-ui"]
