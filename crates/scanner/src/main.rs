@@ -18,7 +18,9 @@ usage: scanner [options] SYSTEM...     scan one or more systems
 
 SYSTEM is a system's number or name (or part of it) from `scanner systems`,
 or the path of a channel file to scan without importing it. Systems scanned
-together must fit in one tuning of the Airspy (about 9 MHz on an Airspy R2).
+together must fit in one tuning of the Airspy (about 9 MHz on an Airspy R2),
+unless --multiband is given: then the scanner takes turns on each band,
+staying while there is traffic.
 
 `import` reads this program's own CSV format or a RadioReference CSV export:
 a conventional frequency list, or a trunked system's talkgroup list together
@@ -29,9 +31,15 @@ with its site list (--sites) for P25 Phase 1 systems.
       --hold SECS    stay on a channel this long after it goes quiet (default 1.5)
       --volume X     audio gain (default 3)
       --record DIR   save every transmission on every channel as a WAV file
+      --record-marked DIR
+                     save the transmissions of channels marked for recording
+                     (the Rec button in scanner-ui), even without --record
       --rate HZ      Airspy sample rate (default: the fastest it offers)
       --stdin        read 16-bit I/Q from stdin instead of an Airspy
       --no-audio     don't play audio (useful with --record)
+      --multiband    hop between bands when the systems don't fit in one tuning
+      --dwell SECS   time to listen to a quiet band before hopping (default 1.5)
+      --stay SECS    longest turn for a band that stays busy (default 20)
       --db FILE      channel database (default: airspy-scanner/channels.db beside
                      this program if that folder exists, otherwise in your
                      user data directory; ~/.local/share on Linux)";
@@ -75,9 +83,13 @@ fn parse_args() -> Options {
             "--hold" => o.config.hold_secs = num(&a, value()),
             "--volume" => o.volume = num(&a, value()),
             "--record" => o.config.record = Some(PathBuf::from(value())),
+            "--record-marked" => o.config.record_marked = Some(PathBuf::from(value())),
             "--rate" => o.config.rate = Some(num(&a, value())),
             "--stdin" => o.config.source = Source::Stdin,
             "--no-audio" => o.config.audio = false,
+            "--multiband" => o.config.multiband = true,
+            "--dwell" => o.config.dwell_secs = num(&a, value()),
+            "--stay" => o.config.max_stay_secs = num(&a, value()),
             "--db" => o.db = PathBuf::from(value()),
             "--name" => o.name = Some(value()),
             "--location" => o.location = Some(value()),
@@ -136,6 +148,7 @@ fn list_channels(plan: &Plan) {
         let tone = match e.kind {
             Kind::Analog { tone_hz: Some(t), .. } => format!("{t:5.1}"),
             Kind::Analog { tone_hz: None, .. } => "  CSQ".into(),
+            Kind::Digital { nac: Some(nac), .. } => format!("  {nac:03X}"),
             _ => "  P25".into(),
         };
         println!(
@@ -170,7 +183,7 @@ fn import(db: &mut Db, o: &Options, file: &str) {
 }
 
 fn scan(o: &Options, plan: Plan) {
-    let (lo, hi, center_hz) = plan.span();
+    let (lo, hi, _) = plan.span();
     let controls = Arc::new(Controls::new(&plan, o.volume, o.squelch_db));
     {
         // Stop cleanly, so the Airspy is released and recordings are closed.
@@ -178,30 +191,39 @@ fn scan(o: &Options, plan: Plan) {
         ctrlc::set_handler(move || controls.stop()).ok();
     }
     eprintln!(
-        "Monitoring {} channels, {:.4}-{:.4} MHz (tuned to {:.5} MHz). Ctrl-C to quit.",
+        "Monitoring {} channels, {:.4}-{:.4} MHz. Ctrl-C to quit.",
         plan.entries.len(),
         lo / 1e6,
-        hi / 1e6,
-        center_hz / 1e6
+        hi / 1e6
     );
+    let mut announced = false;
     let result = engine::run(&plan, &o.config, &controls, |event| {
-        if let Event::Opened {
-            channel,
-            snr_db,
-            playing,
-            talkgroup,
-        } = event
-        {
-            let e = &plan.entries[channel];
-            println!(
-                "{} {} {:>9}  {:<17} {:<40} {:+3.0} dB",
-                Local::now().format("%H:%M:%S"),
-                if playing { '>' } else { ' ' },
-                talkgroup.map_or(e.id(), |tg| format!("TG {tg}")),
-                e.tag,
-                e.desc,
-                snr_db
-            );
+        match event {
+            Event::Opened {
+                channel,
+                snr_db,
+                playing,
+                talkgroup,
+                unit,
+            } => {
+                let e = &plan.entries[channel];
+                println!(
+                    "{} {} {:>9}  {:<17} {:<40} {:+3.0} dB{}",
+                    Local::now().format("%H:%M:%S"),
+                    if playing { '>' } else { ' ' },
+                    talkgroup.map_or(e.id(), |tg| format!("TG {tg}")),
+                    e.tag,
+                    e.desc,
+                    snr_db,
+                    unit.map_or(String::new(), |unit| format!("  unit {unit}"))
+                );
+            }
+            // Announced once, not on every hop.
+            Event::Band { index: 0, count, .. } if count > 1 && !announced => {
+                announced = true;
+                eprintln!("Taking turns between {count} bands.");
+            }
+            _ => {}
         }
     });
     if let Err(e) = result {

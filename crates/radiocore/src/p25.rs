@@ -57,9 +57,15 @@ const MAX_PENDING_FRAMES: usize = 3;
 const CALL_TIMEOUT: usize = 2 * LDU_DIBITS * SPS + 480;
 
 pub enum P25Frame {
-    /// 180 ms of decoded speech at 8 kHz, and who it is addressed to if that
-    /// is known yet.
-    Voice { talkgroup: Option<u16>, pcm: Vec<i16> },
+    /// 180 ms of decoded speech at 8 kHz, with the network access code it
+    /// was sent under and, if known yet, the talkgroup it is addressed to
+    /// and the radio it came from.
+    Voice {
+        nac: u16,
+        talkgroup: Option<u16>,
+        source: Option<u32>,
+        pcm: Vec<i16>,
+    },
     /// The transmission ended.
     End,
 }
@@ -74,7 +80,9 @@ pub struct P25Channel {
     search: usize,
     frame: Option<Frame>,
     vocoder: Vocoder,
+    nac: u16,
     talkgroup: Option<u16>,
+    source: Option<u32>,
     /// Whether the call is unencrypted, once a frame has said so.
     clear: Option<bool>,
     pending: Vec<i16>,
@@ -105,7 +113,9 @@ impl P25Channel {
             search: 0,
             frame: None,
             vocoder: Vocoder::new(Rate::FullRate7200x4400),
+            nac: 0,
             talkgroup: None,
+            source: None,
             clear: None,
             pending: Vec::new(),
             in_call: false,
@@ -116,6 +126,16 @@ impl P25Channel {
     /// Carrier level over the noise floor, in dB.
     pub fn snr_db(&self) -> f32 {
         self.level.snr_db()
+    }
+
+    /// Forget everything in progress, as after the receiver was tuned away
+    /// and back: the samples that follow don't continue the ones before.
+    pub fn resync(&mut self) {
+        self.history = [Complex32::ZERO; SPS];
+        self.phase.clear();
+        self.search = 0;
+        self.frame = None;
+        self.end_call(&mut |_| {});
     }
 
     /// Feed 48 kHz baseband; `sink` gets whatever frames complete.
@@ -150,7 +170,10 @@ impl P25Channel {
                 let bits = self.bits(start, offset, NID_DIBITS + 1);
                 let nid = bits[48..112].iter().fold(0u64, |v, &b| v << 1 | b as u64);
                 match decode_nid(nid) {
-                    Some((_nac, duid)) => self.frame.as_mut().unwrap().duid = Some(duid),
+                    Some((nac, duid)) => {
+                        self.nac = nac;
+                        self.frame.as_mut().unwrap().duid = Some(duid);
+                    }
                     None => {
                         self.search = start + 1;
                         self.frame = None;
@@ -254,6 +277,8 @@ impl P25Channel {
                 let (format, mfid) = ((lc >> 40) as u8, (lc >> 32) as u8);
                 if format == LCF_GROUP_VOICE && mfid == 0 {
                     self.talkgroup = Some(lc as u16);
+                    // The radio's unit ID is the next 24 bits; consoles send 0.
+                    self.source = field(8, 4).map(|id| id as u32).filter(|&id| id != 0).or(self.source);
                 }
             }
         } else if let Some(es) = field(12, 2) {
@@ -280,7 +305,9 @@ impl P25Channel {
         let waited = self.pending.len() >= MAX_PENDING_FRAMES * VOICE_FRAME_SAMPLES;
         if self.clear == Some(true) && (self.talkgroup.is_some() || waited) {
             sink(P25Frame::Voice {
+                nac: self.nac,
                 talkgroup: self.talkgroup,
+                source: self.source,
                 pcm: std::mem::take(&mut self.pending),
             });
         } else if waited {
@@ -294,6 +321,7 @@ impl P25Channel {
         }
         self.in_call = false;
         self.talkgroup = None;
+        self.source = None;
         self.clear = None;
         self.pending.clear();
         self.vocoder.reset();

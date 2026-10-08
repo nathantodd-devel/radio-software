@@ -26,13 +26,16 @@ const STARTER_SYSTEMS: &[(&str, &str, &str)] = &[
     ),
 ];
 
-const SCHEMA: &str = "
-    CREATE TABLE systems (
+/// Each step brings a database up one version; `PRAGMA user_version`
+/// counts how many have been applied.
+const MIGRATIONS: &[&str] = &[
+    "CREATE TABLE systems (
         id INTEGER PRIMARY KEY,
         name TEXT NOT NULL,
         location TEXT NOT NULL
     );
-    -- A channel is an analog frequency or a P25 talkgroup, never both.
+    -- A channel is a frequency (analog, or P25 if `p25` is set) or a
+    -- talkgroup on its system's P25 frequencies, never both.
     CREATE TABLE channels (
         id INTEGER PRIMARY KEY,
         system_id INTEGER NOT NULL REFERENCES systems(id) ON DELETE CASCADE,
@@ -48,9 +51,16 @@ const SCHEMA: &str = "
     CREATE TABLE p25_frequencies (
         system_id INTEGER NOT NULL REFERENCES systems(id) ON DELETE CASCADE,
         freq_hz REAL NOT NULL
-    );
-    PRAGMA user_version = 1;
-";
+    );",
+    "ALTER TABLE channels ADD COLUMN p25 INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE channels ADD COLUMN nac INTEGER;
+    ALTER TABLE channels ADD COLUMN priority INTEGER NOT NULL DEFAULT 0;
+    CREATE TABLE settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    );",
+    "ALTER TABLE channels ADD COLUMN record INTEGER NOT NULL DEFAULT 0;",
+];
 
 const DATA_DIR: &str = "airspy-scanner";
 const DB_FILE: &str = "channels.db";
@@ -109,9 +119,17 @@ impl Db {
         let conn = Connection::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let mut db = Self { conn };
         sql(db.conn.execute_batch("PRAGMA foreign_keys = ON;"))?;
-        let version: i64 = sql(db.conn.query_row("PRAGMA user_version", [], |r| r.get(0)))?;
+        let version: usize = sql(db.conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0)))? as usize;
+        if version > MIGRATIONS.len() {
+            return Err(format!("{}: made by a newer version of this program", path.display()));
+        }
+        for (applied, migration) in MIGRATIONS.iter().enumerate().skip(version) {
+            sql(db.conn.execute_batch(&format!(
+                "BEGIN; {migration}; PRAGMA user_version = {}; COMMIT;",
+                applied + 1
+            )))?;
+        }
         if version == 0 {
-            sql(db.conn.execute_batch(SCHEMA))?;
             for (name, location, csv) in STARTER_SYSTEMS {
                 let (plan, _) = Plan::parse(csv, name, None)?;
                 db.add_system(name, location, &plan)?;
@@ -179,19 +197,36 @@ impl Db {
         ))?;
         let system = tx.last_insert_rowid();
         for (position, e) in plan.entries.iter().enumerate() {
-            let (freq_hz, tone_hz, narrow, talkgroup) = match e.kind {
+            let (freq_hz, tone_hz, narrow, talkgroup, p25, nac) = match e.kind {
                 Kind::Analog {
                     freq_hz,
                     tone_hz,
                     narrow,
-                } => (Some(freq_hz), tone_hz, narrow, None),
-                Kind::Talkgroup { id, .. } => (None, None, false, Some(id)),
+                } => (Some(freq_hz), tone_hz, narrow, None, false, None),
+                Kind::Digital { freq_hz, nac } => (Some(freq_hz), None, false, None, true, nac),
+                Kind::Talkgroup { id, .. } => (None, None, false, Some(id), true, None),
                 Kind::OtherTalkgroups { .. } => continue,
             };
             sql(tx.execute(
-                "INSERT INTO channels (system_id, position, freq_hz, tone_hz, narrow, talkgroup, tag, description, skip)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                params![system, position as i64, freq_hz, tone_hz, narrow, talkgroup, e.tag, e.desc, e.skip],
+                "INSERT INTO channels
+                    (system_id, position, freq_hz, tone_hz, narrow, talkgroup, p25, nac, tag, description,
+                     skip, priority, record)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                params![
+                    system,
+                    position as i64,
+                    freq_hz,
+                    tone_hz,
+                    narrow,
+                    talkgroup,
+                    p25,
+                    nac,
+                    e.tag,
+                    e.desc,
+                    e.skip,
+                    e.priority,
+                    e.record
+                ],
             ))?;
         }
         for f in &plan.p25 {
@@ -216,6 +251,42 @@ impl Db {
         .map(|_| ())
     }
 
+    /// Remember whether a channel interrupts the others.
+    pub fn set_priority(&self, channel: i64, priority: bool) -> Result<(), String> {
+        sql(self.conn.execute(
+            "UPDATE channels SET priority = ?2 WHERE id = ?1",
+            params![channel, priority],
+        ))
+        .map(|_| ())
+    }
+
+    /// Remember whether a channel's calls are always saved. Marking a
+    /// channel for recording also makes it a priority channel: one worth
+    /// recording is one not to miss.
+    pub fn set_record(&self, channel: i64, record: bool) -> Result<(), String> {
+        sql(self.conn.execute(
+            "UPDATE channels SET record = ?2, priority = priority OR ?2 WHERE id = ?1",
+            params![channel, record],
+        ))
+        .map(|_| ())
+    }
+
+    /// A saved setting, if it has ever been set.
+    pub fn setting(&self, key: &str) -> Option<String> {
+        self.conn
+            .query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| r.get(0))
+            .ok()
+    }
+
+    pub fn set_setting(&self, key: &str, value: &str) -> Result<(), String> {
+        sql(self.conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        ))
+        .map(|_| ())
+    }
+
     /// The channels of the given systems as one plan, in the order given.
     pub fn plan(&self, systems: &[i64]) -> Result<Plan, String> {
         let mut plan = Plan::default();
@@ -228,11 +299,16 @@ impl Db {
                 return Err(format!("system {system} is no longer in the database"));
             }
             let mut stmt = sql(self.conn.prepare(
-                "SELECT id, freq_hz, tone_hz, narrow, talkgroup, tag, description, skip
+                "SELECT id, freq_hz, tone_hz, narrow, talkgroup, tag, description, skip, p25, nac, priority, record
                  FROM channels WHERE system_id = ?1 ORDER BY position",
             ))?;
             let rows = stmt.query_map([system], |r| {
+                let p25: bool = r.get(8)?;
                 let kind = match (r.get::<_, Option<f64>>(1)?, r.get::<_, Option<u16>>(4)?) {
+                    (Some(freq_hz), _) if p25 => Kind::Digital {
+                        freq_hz,
+                        nac: r.get(9)?,
+                    },
                     (Some(freq_hz), _) => Kind::Analog {
                         freq_hz,
                         tone_hz: r.get(2)?,
@@ -246,6 +322,8 @@ impl Db {
                 Ok(Entry {
                     channel_id: Some(r.get(0)?),
                     skip: r.get(7)?,
+                    priority: r.get(10)?,
+                    record: r.get(11)?,
                     kind,
                     tag: r.get(5)?,
                     desc: r.get(6)?,
@@ -277,7 +355,7 @@ mod tests {
     fn starter_systems_round_trip() {
         let dir = std::env::temp_dir().join(format!("scanner-db-test-{}", std::process::id()));
         let path = dir.join("channels.db");
-        let db = Db::open(&path).unwrap();
+        let mut db = Db::open(&path).unwrap();
         let systems = db.systems().unwrap();
         assert_eq!(
             systems.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
@@ -294,14 +372,56 @@ mod tests {
         assert_eq!(plan.entries.len(), 33);
         let first = plan.entries[0].channel_id.unwrap();
         db.set_skip(first, true).unwrap();
+
+        db.set_priority(first, true).unwrap();
+        assert_eq!(db.setting("volume"), None);
+        db.set_setting("volume", "3").unwrap();
+        db.set_setting("volume", "4.5").unwrap();
+        let (digital, _) = Plan::parse("453.1, 293, p25, PD 3, Digital\n", "t", None).unwrap();
+        let digital_id = db.add_system("Digital", "", &digital).unwrap();
         drop(db);
+
+        // A database from before settings and priorities existed is upgraded.
+        let old = dir.join("old.db");
+        let conn = Connection::open(&old).unwrap();
+        conn.execute_batch(&format!("{}; PRAGMA user_version = 1;", MIGRATIONS[0]))
+            .unwrap();
+        conn.execute("INSERT INTO systems (name, location) VALUES ('Old', '')", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO channels (system_id, position, freq_hz, tone_hz, tag, description) VALUES (1, 0, 155e6, 100.0, 'A', '')",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+        let upgraded = Db::open(&old).unwrap();
+        let plan = upgraded.plan(&[1]).unwrap();
+        assert!(matches!(plan.entries[0].kind, Kind::Analog { tone_hz: Some(_), .. }));
+        assert!(!plan.entries[0].priority);
+        assert_eq!(upgraded.systems().unwrap().len(), 1);
+        drop(upgraded);
 
         // Skips persist; reopening doesn't seed a second time.
         let mut db = Db::open(&path).unwrap();
-        assert_eq!(db.systems().unwrap().len(), 3);
-        assert!(db.plan(&[systems[0].id]).unwrap().entries[0].skip);
+        assert_eq!(db.systems().unwrap().len(), 4);
+        let reloaded = db.plan(&[systems[0].id]).unwrap();
+        assert!(reloaded.entries[0].skip && reloaded.entries[0].priority && !reloaded.entries[1].priority);
+        // Marking for recording brings priority with it; unmarking leaves it.
+        let second = reloaded.entries[1].channel_id.unwrap();
+        db.set_record(second, true).unwrap();
+        let marked = db.plan(&[systems[0].id]).unwrap();
+        assert!(marked.entries[1].record && marked.entries[1].priority && !marked.entries[2].record);
+        db.set_record(second, false).unwrap();
+        let unmarked = db.plan(&[systems[0].id]).unwrap();
+        assert!(!unmarked.entries[1].record && unmarked.entries[1].priority);
+        assert_eq!(db.setting("volume").as_deref(), Some("4.5"));
+        let digital = db.plan(&[digital_id]).unwrap();
+        assert!(matches!(
+            digital.entries[0].kind,
+            Kind::Digital { nac: Some(0x293), .. }
+        ));
         db.remove_system(systems[0].id).unwrap();
-        assert_eq!(db.systems().unwrap().len(), 2);
+        assert_eq!(db.systems().unwrap().len(), 3);
         assert!(db.plan(&[systems[0].id]).is_err());
         std::fs::remove_dir_all(dir).unwrap();
     }

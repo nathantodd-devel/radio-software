@@ -2,6 +2,7 @@
 //! it publishes for the window to draw.
 
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
@@ -17,6 +18,10 @@ pub struct Call {
     pub channel: usize,
     /// For P25 calls.
     pub talkgroup: Option<u16>,
+    /// The calling radio, for P25 calls that say.
+    pub unit: Option<u32>,
+    /// The call's audio, once it has ended.
+    pub recording: Option<PathBuf>,
     pub snr_db: f32,
     /// Length in seconds, once it has ended.
     pub secs: Option<f32>,
@@ -31,6 +36,8 @@ pub struct Live {
     pub calls: Vec<u32>,
     pub last_heard: Vec<Option<String>>,
     pub playing: Option<usize>,
+    /// When taking turns between bands: (which, of how many, from Hz, to Hz).
+    pub band: Option<(usize, usize, f64, f64)>,
     /// Newest first.
     pub log: VecDeque<Call>,
     /// Why the engine stopped, if it did so on its own.
@@ -75,11 +82,18 @@ impl Session {
                                 call.played = true;
                             }
                         }
+                        Event::Band {
+                            index,
+                            count,
+                            lo_hz,
+                            hi_hz,
+                        } => live.band = (count > 1).then_some((index, count, lo_hz, hi_hz)),
                         Event::Opened {
                             channel,
                             snr_db,
                             playing,
                             talkgroup,
+                            unit,
                         } => {
                             let time = Local::now().format("%H:%M:%S").to_string();
                             live.open[channel] = true;
@@ -89,16 +103,25 @@ impl Session {
                                 time,
                                 channel,
                                 talkgroup,
+                                unit,
+                                recording: None,
                                 snr_db,
                                 secs: None,
                                 played: playing,
                             });
                             live.log.truncate(LOG_LEN);
                         }
-                        Event::Closed { channel, secs } => {
+                        Event::Closed {
+                            channel,
+                            secs,
+                            unit,
+                            recording,
+                        } => {
                             live.open[channel] = false;
                             if let Some(call) = live.log.iter_mut().find(|c| c.channel == channel && c.secs.is_none()) {
                                 call.secs = Some(secs);
+                                call.unit = unit.or(call.unit);
+                                call.recording = recording;
                             }
                         }
                     }

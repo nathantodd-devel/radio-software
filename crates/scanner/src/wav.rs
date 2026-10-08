@@ -1,4 +1,4 @@
-//! Minimal 16-bit mono WAV writer.
+//! Minimal 16-bit mono WAV files, as this program writes them.
 
 use std::fs::File;
 use std::io::{self, BufWriter, Seek, SeekFrom, Write};
@@ -42,4 +42,12 @@ impl Writer {
             self.file.flush()
         })();
     }
+}
+
+/// The samples of a file written by [`Writer`].
+pub fn read(path: &Path) -> io::Result<Vec<i16>> {
+    const HEADER_LEN: usize = 44;
+    let bytes = std::fs::read(path)?;
+    let data = bytes.get(HEADER_LEN..).unwrap_or_default();
+    Ok(data.as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes(*b)).collect())
 }

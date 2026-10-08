@@ -2,19 +2,19 @@
 //! [`Event`]s out. Blocking; front ends run it on a thread of its own and
 //! steer it through [`Controls`].
 
+use std::collections::VecDeque;
 use std::fs;
 use std::io::{self, BufReader, Read};
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering::Relaxed};
 use std::sync::mpsc::Receiver;
-
-use std::collections::VecDeque;
 
 use airspy::Airspy;
 use chrono::Local;
 use radiocore::{Channelizer, Complex32, NfmChannel, NfmConfig, P25Channel, P25Frame};
 
-use crate::plan::{BIN_HZ, Entry, Kind, Plan};
+use crate::plan::{BIN_HZ, Entry, Kind, Listener, Plan};
 use crate::wav;
 
 const CHANNEL_BINS: usize = 96; // 48 kHz per channel
@@ -31,6 +31,10 @@ const P25_LEVEL: f32 = 1.0 / 32768.0;
 /// P25 voice arrives 180 ms at a time; this much is buffered (in 16 kHz
 /// samples) before a call starts playing, so playback doesn't run dry.
 const P25_PREBUFFER: usize = 4320;
+/// Seconds of reception to throw away while the tuner settles: after the
+/// device starts, and after each change of band.
+const START_SETTLE_SECS: f64 = 0.3;
+const RETUNE_SETTLE_SECS: f64 = 0.1;
 
 pub enum Source {
     /// Receive from the first Airspy found.
@@ -46,11 +50,22 @@ pub struct Config {
     pub hold_secs: f32,
     /// Directory to save every transmission to, as WAV files.
     pub record: Option<PathBuf>,
+    /// Directory to save the transmissions of channels marked for recording
+    /// to, whether or not everything else is being saved.
+    pub record_marked: Option<PathBuf>,
     /// Airspy sample rate; `None` for the fastest the device offers.
     pub rate: Option<u32>,
     pub source: Source,
     /// Play audio through the speakers.
     pub audio: bool,
+    /// When the channels are too spread out for one tuning, take turns
+    /// listening to each band rather than refusing to run.
+    pub multiband: bool,
+    /// Seconds to listen to a quiet band before moving to the next.
+    pub dwell_secs: f32,
+    /// Seconds after which a band that stays busy is left anyway, between
+    /// transmissions, so the other bands get a turn.
+    pub max_stay_secs: f32,
 }
 
 impl Default for Config {
@@ -59,9 +74,13 @@ impl Default for Config {
             gain: 17,
             hold_secs: 1.5,
             record: None,
+            record_marked: None,
             rate: None,
             source: Source::Airspy,
             audio: true,
+            multiband: false,
+            dwell_secs: 1.5,
+            max_stay_secs: 20.0,
         }
     }
 }
@@ -74,10 +93,17 @@ pub struct Controls {
     squelch_db: AtomicU32,
     pinned: AtomicUsize,
     skipped: Vec<AtomicBool>,
+    priority: Vec<AtomicBool>,
+    recorded: Vec<AtomicBool>,
+    /// A recording to play (or `None` to stop playing one), until the engine
+    /// picks the request up.
+    replay_request: Mutex<Option<Option<PathBuf>>>,
+    replaying: AtomicBool,
 }
 
 impl Controls {
-    /// Controls for running `plan`, with its channels' saved skips applied.
+    /// Controls for running `plan`, with its channels' saved skips and
+    /// priorities applied.
     pub fn new(plan: &Plan, volume: f32, squelch_db: f32) -> Self {
         Self {
             stop: AtomicBool::new(false),
@@ -86,6 +112,10 @@ impl Controls {
             squelch_db: AtomicU32::new(squelch_db.to_bits()),
             pinned: AtomicUsize::new(usize::MAX),
             skipped: plan.entries.iter().map(|e| AtomicBool::new(e.skip)).collect(),
+            priority: plan.entries.iter().map(|e| AtomicBool::new(e.priority)).collect(),
+            recorded: plan.entries.iter().map(|e| AtomicBool::new(e.record)).collect(),
+            replay_request: Mutex::new(None),
+            replaying: AtomicBool::new(false),
         }
     }
 
@@ -136,23 +166,72 @@ impl Controls {
     pub fn set_skipped(&self, channel: usize, skipped: bool) {
         self.skipped[channel].store(skipped, Relaxed);
     }
+
+    /// Priority channels interrupt whatever else is playing.
+    pub fn priority(&self, channel: usize) -> bool {
+        self.priority[channel].load(Relaxed)
+    }
+
+    pub fn set_priority(&self, channel: usize, priority: bool) {
+        self.priority[channel].store(priority, Relaxed);
+    }
+
+    /// Channels marked for recording have their calls saved to
+    /// [`Config::record_marked`].
+    pub fn recorded(&self, channel: usize) -> bool {
+        self.recorded[channel].load(Relaxed)
+    }
+
+    pub fn set_recorded(&self, channel: usize, recorded: bool) {
+        self.recorded[channel].store(recorded, Relaxed);
+    }
+
+    /// Play a recording made by this engine in place of live audio.
+    pub fn replay(&self, recording: PathBuf) {
+        *self.replay_request.lock().unwrap() = Some(Some(recording));
+    }
+
+    pub fn stop_replay(&self) {
+        *self.replay_request.lock().unwrap() = Some(None);
+    }
+
+    /// Whether a recording is playing.
+    pub fn replaying(&self) -> bool {
+        self.replaying.load(Relaxed)
+    }
 }
 
 pub enum Event<'a> {
     /// A transmission started; `playing` if it is the one on the speaker.
-    /// `talkgroup` is set for P25 calls.
+    /// For P25 calls, `talkgroup` and the calling radio's `unit` ID are
+    /// given when the call carried them.
     Opened {
         channel: usize,
         snr_db: f32,
         playing: bool,
         talkgroup: Option<u16>,
+        unit: Option<u32>,
     },
-    /// A transmission ended after `secs` seconds.
-    Closed { channel: usize, secs: f32 },
+    /// A transmission ended after `secs` seconds; `recording` is its file
+    /// if recording is on. `unit` is as in `Opened`, for calls that only
+    /// named their radio partway through.
+    Closed {
+        channel: usize,
+        secs: f32,
+        unit: Option<u32>,
+        recording: Option<PathBuf>,
+    },
     /// The channel on the speaker changed.
     Playing(Option<usize>),
     /// Carrier level over the noise floor for every channel, in dB.
     Levels(&'a [f32]),
+    /// Tuned to band `index` of `count`, covering `lo_hz` to `hi_hz`.
+    Band {
+        index: usize,
+        count: usize,
+        lo_hz: f64,
+        hi_hz: f64,
+    },
 }
 
 /// Sample rate used when the device can't be asked (reading from stdin).
@@ -181,19 +260,15 @@ pub fn usable_span_hz(rate: u32) -> f64 {
     rate as f64 * USABLE_BANDWIDTH
 }
 
-/// Samples to throw away after tuning, in seconds of reception, while the
-/// tuner and gain settle.
-const SETTLE_SECS: f64 = 0.3;
-
 /// Where the samples come from.
 enum Input {
     Stdin(BufReader<io::StdinLock<'static>>, Vec<u8>),
     Airspy {
-        /// Held open for as long as it is receiving.
-        _device: Airspy,
+        device: Airspy,
         blocks: Receiver<airspy::Block>,
         /// Samples received but not yet handed on.
         queue: VecDeque<i16>,
+        rate: u32,
     },
 }
 
@@ -209,20 +284,39 @@ impl Input {
                 device.set_sample_rate(rate)?;
                 device.set_linearity_gain(cfg.gain)?;
                 let blocks = device.start()?;
-                device.set_frequency(center_hz.round() as u32)?;
-                let mut settling = (rate as f64 * SETTLE_SECS) as usize;
-                while settling > 0 {
-                    let Ok(block) = blocks.recv() else { break };
-                    settling = settling.saturating_sub(block.iq.len() / 2);
-                }
-                Ok(Input::Airspy {
-                    _device: device,
+                let mut input = Input::Airspy {
+                    device,
                     blocks,
                     queue: VecDeque::new(),
-                })
+                    rate,
+                };
+                input.tune(center_hz, START_SETTLE_SECS)?;
+                Ok(input)
             })()
             .map_err(|e: airspy::Error| e.to_string()),
         }
+    }
+
+    /// Change frequency, dropping what was received before and while the
+    /// tuner settles.
+    fn tune(&mut self, center_hz: f64, settle_secs: f64) -> Result<(), airspy::Error> {
+        if let Input::Airspy {
+            device,
+            blocks,
+            queue,
+            rate,
+        } = self
+        {
+            device.set_frequency(center_hz.round() as u32)?;
+            queue.clear();
+            while blocks.try_recv().is_ok() {}
+            let mut settling = (*rate as f64 * settle_secs) as usize;
+            while settling > 0 {
+                let Ok(block) = blocks.recv() else { break };
+                settling = settling.saturating_sub(block.iq.len() / 2);
+            }
+        }
+        Ok(())
     }
 
     /// Fill `iq`; false once the input has ended.
@@ -263,21 +357,28 @@ fn to_pcm(audio: &[f32], volume: f32, pcm: &mut Vec<i16>) {
 
 /// A receiver on one channelizer output.
 enum Rx {
-    /// Analog FM, feeding the plan entry with the same index.
-    Nfm(Box<NfmChannel>),
+    /// Analog FM, feeding plan entry `row`.
+    Nfm {
+        channel: Box<NfmChannel>,
+        row: usize,
+    },
     P25(Box<P25Rx>),
 }
 
 /// A P25 frequency, and the call on it if there is one.
 #[derive(Default)]
 struct P25Rx {
-    /// The system this frequency belongs to.
+    /// The trunked system this frequency belongs to, if it is one.
     system: i64,
+    /// For a conventional channel: its plan entry, and the network access
+    /// code calls must carry to count.
+    fixed: Option<(usize, Option<u16>)>,
     channel: P25Channel,
     frames: Vec<P25Frame>,
     /// Plan entry this call is playing on.
     row: Option<usize>,
     talkgroup: Option<u16>,
+    unit: Option<u32>,
     /// Decoded speech at the audio rate, waiting to be played.
     fifo: VecDeque<f32>,
     playing: bool,
@@ -303,15 +404,27 @@ impl P25Rx {
     fn hang_up(&mut self) {
         *self = Self {
             system: self.system,
+            fixed: self.fixed,
             channel: std::mem::take(&mut self.channel),
             ..Self::default()
         };
     }
 }
 
+/// One tuning of the Airspy and the receivers that run while it is tuned
+/// there.
+struct Band {
+    lo_hz: f64,
+    hi_hz: f64,
+    center_hz: f64,
+    channelizer: Channelizer,
+    rxs: Vec<Rx>,
+    /// Upper bound on the analog channels' noise floors.
+    floor_cap: f32,
+}
+
 /// Receive until the input ends or [`Controls::stop`] is called.
 pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl FnMut(Event)) -> Result<(), String> {
-    let (lo, hi, center_hz) = plan.span();
     if plan.frequencies().next().is_none() {
         return Err("nothing to scan: no channels selected".into());
     }
@@ -319,44 +432,79 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
     if rate as f64 % (2.0 * BIN_HZ) != 0.0 {
         return Err("sample rate must be a multiple of 1000".into());
     }
-    if hi - lo > usable_span_hz(rate) {
+    let layout = plan.bands(usable_span_hz(rate));
+    if layout.len() > 1 && !cfg.multiband {
+        let (lo, hi, _) = plan.span();
         return Err(format!(
-            "these channels spread over {:.1} MHz; this Airspy covers {:.1} MHz at a time",
+            "these channels spread over {:.1} MHz and this Airspy covers {:.1} MHz at a time; \
+             turn on multi-band scanning to take turns between {} bands",
             (hi - lo) / 1e6,
-            usable_span_hz(rate) / 1e6
+            usable_span_hz(rate) / 1e6,
+            layout.len()
         ));
     }
+    if layout.len() > 1 && matches!(cfg.source, Source::Stdin) {
+        return Err("multi-band scanning needs an Airspy to retune; stdin carries one band".into());
+    }
 
-    // Channelizer outputs: the analog entries, then the P25 frequencies.
-    let mut squelch_db = controls.squelch_db();
-    let (mut offsets, mut rxs, mut rx_rows) = (Vec::new(), Vec::new(), Vec::new());
+    let rows = plan.entries.len();
     let block_len = CHANNEL_BINS / 2;
-    for (row, e) in plan.entries.iter().enumerate() {
-        if let Kind::Analog {
-            freq_hz,
-            tone_hz,
-            narrow,
-        } = e.kind
-        {
-            offsets.push(freq_hz - center_hz);
-            rx_rows.push(row);
-            rxs.push(Rx::Nfm(Box::new(NfmChannel::new(NfmConfig {
-                sample_rate: CHANNEL_RATE,
-                block_len,
-                max_deviation: if narrow { 2500.0 } else { 5000.0 },
-                tone_hz,
-                squelch: 10f32.powf(squelch_db / 10.0),
-            }))));
+    let mut squelch_db = controls.squelch_db();
+    // Which band each plan entry is heard on; a talkgroup's is the first
+    // with one of its system's frequencies.
+    let mut row_band: Vec<Option<usize>> = vec![None; rows];
+    let mut bands: Vec<Band> = Vec::new();
+    for (b, tuning) in layout.iter().enumerate() {
+        let (mut offsets, mut rxs) = (Vec::new(), Vec::new());
+        for &(freq_hz, listener) in &tuning.listeners {
+            offsets.push(freq_hz - tuning.center_hz);
+            rxs.push(match listener {
+                Listener::Row(row) => {
+                    row_band[row] = Some(b);
+                    match plan.entries[row].kind {
+                        Kind::Analog { tone_hz, narrow, .. } => Rx::Nfm {
+                            channel: Box::new(NfmChannel::new(NfmConfig {
+                                sample_rate: CHANNEL_RATE,
+                                block_len,
+                                max_deviation: if narrow { 2500.0 } else { 5000.0 },
+                                tone_hz,
+                                squelch: 10f32.powf(squelch_db / 10.0),
+                            })),
+                            row,
+                        },
+                        Kind::Digital { nac, .. } => Rx::P25(Box::new(P25Rx {
+                            fixed: Some((row, nac)),
+                            ..P25Rx::default()
+                        })),
+                        Kind::Talkgroup { .. } | Kind::OtherTalkgroups { .. } => unreachable!("not tied to a frequency"),
+                    }
+                }
+                Listener::Trunked { system } => {
+                    for (row, e) in plan.entries.iter().enumerate() {
+                        let on_system = matches!(e.kind, Kind::Talkgroup { system: s, .. } | Kind::OtherTalkgroups { system: s } if s == system);
+                        if on_system && row_band[row].is_none() {
+                            row_band[row] = Some(b);
+                        }
+                    }
+                    Rx::P25(Box::new(P25Rx {
+                        system,
+                        ..P25Rx::default()
+                    }))
+                }
+            });
         }
+        let channelizer = Channelizer::new(rate as f64, BIN_HZ, CHANNEL_BINS, IF_CUTOFF_HZ, &offsets);
+        assert_eq!(block_len, channelizer.out_len());
+        bands.push(Band {
+            lo_hz: tuning.lo_hz,
+            hi_hz: tuning.hi_hz,
+            center_hz: tuning.center_hz,
+            channelizer,
+            rxs,
+            floor_cap: f32::INFINITY,
+        });
     }
-    for f in &plan.p25 {
-        offsets.push(f.freq_hz - center_hz);
-        rxs.push(Rx::P25(Box::new(P25Rx {
-            system: f.system,
-            ..P25Rx::default()
-        })));
-    }
-    // The entry for a call: its talkgroup's, or its system's catch-all.
+    // The entry for a trunked call: its talkgroup's, or its system's catch-all.
     let talkgroup_row = |system: i64, talkgroup: Option<u16>| {
         let listed =
             |e: &Entry| matches!(e.kind, Kind::Talkgroup { system: s, id } if s == system && Some(id) == talkgroup);
@@ -366,11 +514,8 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
             .position(listed)
             .or_else(|| plan.entries.iter().position(other))
     };
-    let mut channelizer = Channelizer::new(rate as f64, BIN_HZ, CHANNEL_BINS, IF_CUTOFF_HZ, &offsets);
-    assert_eq!(block_len, channelizer.out_len());
-    let rows = plan.entries.len();
 
-    if let Some(dir) = &cfg.record {
+    for dir in cfg.record.iter().chain(&cfg.record_marked) {
         fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
     let mut speaker = if cfg.audio {
@@ -378,35 +523,56 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
     } else {
         None
     };
-    let mut input = Input::open(center_hz, rate, cfg)?;
+    let mut input = Input::open(bands[0].center_hz, rate, cfg)?;
 
-    let hop = channelizer.hop();
+    let hop = bands[0].channelizer.hop();
     let audio_len = block_len / 3;
     let block_secs = block_len as f32 / CHANNEL_RATE;
     let hold_blocks = (cfg.hold_secs / block_secs) as u32;
+    let dwell_blocks = (cfg.dwell_secs / block_secs) as u32;
+    let max_stay_blocks = (cfg.max_stay_secs / block_secs) as u32;
     let mut iq = vec![Complex32::ZERO; hop];
     let mut audio = vec![Vec::with_capacity(audio_len); rows];
     let mut open = vec![false; rows];
     let mut open_blocks = vec![0u32; rows];
-    // Which receiver's P25 call has each talkgroup entry, if any.
+    // Which receiver of the tuned band feeds each open entry.
     let mut row_rx: Vec<Option<usize>> = vec![None; rows];
-    let mut recorders: Vec<Option<wav::Writer>> = (0..rows).map(|_| None).collect();
+    // The radio heard on each open P25 entry, once it has said who it is.
+    let mut row_unit: Vec<Option<u32>> = vec![None; rows];
+    let mut recorders: Vec<Option<(wav::Writer, PathBuf)>> = (0..rows).map(|_| None).collect();
     let mut pcm = Vec::with_capacity(audio_len);
     let silence = vec![0i16; audio_len];
-    let mut floor_cap = f32::INFINITY;
     let mut floors = Vec::with_capacity(rows);
     let mut levels = vec![0.0; rows];
     let mut current: Option<usize> = None;
     let mut playing: Option<usize> = None;
+    let mut replay: Option<(Vec<i16>, usize)> = None;
     let mut idle_blocks = 0u32;
+    let mut band_idle_blocks = 0u32;
+    let mut band_blocks = 0u32;
+    let mut tuned = 0;
     let mut blocks = 0u64;
+    let mut failure = None;
+
+    let announce = |tuned: usize, bands: &[Band], on_event: &mut dyn FnMut(Event)| {
+        on_event(Event::Band {
+            index: tuned,
+            count: bands.len(),
+            lo_hz: bands[tuned].lo_hz,
+            hi_hz: bands[tuned].hi_hz,
+        });
+    };
+    announce(tuned, &bands, &mut on_event);
 
     while !controls.stop.load(Relaxed) && input.read(&mut iq) {
-        channelizer.process(&iq, |i, samples| match &mut rxs[i] {
-            Rx::Nfm(channel) => {
-                let row = rx_rows[i];
-                audio[row].clear();
-                open[row] = channel.process(samples, floor_cap, &mut audio[row]) && !controls.skipped(row);
+        let band = &mut bands[tuned];
+        let floor_cap = band.floor_cap;
+        let rxs = &mut band.rxs;
+        band.channelizer.process(&iq, |i, samples| match &mut rxs[i] {
+            Rx::Nfm { channel, row } => {
+                audio[*row].clear();
+                open[*row] = channel.process(samples, floor_cap, &mut audio[*row]) && !controls.skipped(*row);
+                row_rx[*row] = Some(i);
             }
             Rx::P25(rx) => {
                 let frames = &mut rx.frames;
@@ -418,9 +584,17 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
             let Rx::P25(rx) = rx else { continue };
             for frame in std::mem::take(&mut rx.frames) {
                 match frame {
-                    P25Frame::Voice { talkgroup, pcm } => {
-                        // The talkgroup can arrive a frame after the voice does.
-                        let row = talkgroup_row(rx.system, talkgroup);
+                    P25Frame::Voice {
+                        nac,
+                        talkgroup,
+                        source,
+                        pcm,
+                    } => {
+                        let row = match rx.fixed {
+                            Some((row, wanted)) => wanted.is_none_or(|w| w == nac).then_some(row),
+                            // The talkgroup can arrive a frame after the voice does.
+                            None => talkgroup_row(rx.system, talkgroup),
+                        };
                         if rx.row != row && !rx.playing {
                             if let Some(old) = rx.row.take() {
                                 row_rx[old] = None;
@@ -432,7 +606,9 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
                                 rx.talkgroup = talkgroup;
                             }
                         }
-                        if rx.row.is_some() {
+                        if let Some(row) = rx.row {
+                            rx.unit = source.or(rx.unit);
+                            row_unit[row] = rx.unit;
                             rx.queue(&pcm);
                         }
                     }
@@ -462,25 +638,25 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
             // is a fair picture of the band's noise.
             floors.clear();
             floors.extend(rxs.iter().filter_map(|rx| match rx {
-                Rx::Nfm(channel) => Some(channel.floor()).filter(|f| f.is_finite()),
+                Rx::Nfm { channel, .. } => Some(channel.floor()).filter(|f| f.is_finite()),
                 Rx::P25(_) => None,
             }));
             if !floors.is_empty() {
                 floors.sort_by(f32::total_cmp);
-                floor_cap = floors[floors.len() / 2] * 2.0;
+                band.floor_cap = floors[floors.len() / 2] * 2.0;
             }
             if controls.squelch_db() != squelch_db {
                 squelch_db = controls.squelch_db();
-                for rx in &mut rxs {
-                    if let Rx::Nfm(channel) = rx {
+                for rx in bands.iter_mut().flat_map(|b| &mut b.rxs) {
+                    if let Rx::Nfm { channel, .. } = rx {
                         channel.set_squelch(10f32.powf(squelch_db / 10.0));
                     }
                 }
             }
             levels.fill(0.0);
-            for (i, rx) in rxs.iter().enumerate() {
+            for rx in &bands[tuned].rxs {
                 match rx {
-                    Rx::Nfm(channel) => levels[rx_rows[i]] = channel.snr_db(),
+                    Rx::Nfm { channel, row } => levels[*row] = channel.snr_db(),
                     Rx::P25(rx) => {
                         if let Some(row) = rx.row {
                             levels[row] = rx.channel.snr_db();
@@ -492,8 +668,12 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
         }
         blocks += 1;
 
+        let priority = (0..rows).find(|&c| open[c] && controls.priority(c));
         if let Some(pin) = controls.pinned() {
             current = Some(pin);
+        } else if let Some(urgent) = priority.filter(|_| !current.is_some_and(|c| open[c] && controls.priority(c))) {
+            current = Some(urgent);
+            idle_blocks = 0;
         } else {
             match current {
                 Some(c) if open[c] => idle_blocks = 0,
@@ -510,49 +690,54 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
         for c in 0..rows {
             if open[c] && open_blocks[c] == 0 {
                 let e = &plan.entries[c];
-                let (snr_db, talkgroup) = match row_rx[c].map(|i| &rxs[i]) {
-                    Some(Rx::P25(rx)) => (rx.channel.snr_db(), rx.talkgroup),
-                    _ => match rx_rows.iter().position(|&row| row == c).map(|i| &rxs[i]) {
-                        Some(Rx::Nfm(channel)) => (channel.snr_db(), None),
-                        _ => (0.0, None),
-                    },
+                let (snr_db, talkgroup, unit) = match row_rx[c].map(|i| &bands[tuned].rxs[i]) {
+                    Some(Rx::P25(rx)) => (rx.channel.snr_db(), rx.talkgroup, rx.unit),
+                    Some(Rx::Nfm { channel, .. }) => (channel.snr_db(), None, None),
+                    None => (0.0, None, None),
                 };
                 on_event(Event::Opened {
                     channel: c,
                     snr_db,
                     playing: now_playing == Some(c),
                     talkgroup,
+                    unit,
                 });
-                if let Some(dir) = &cfg.record {
+                // A marked channel's calls go to their own place if there is one.
+                let marked = cfg.record_marked.as_ref().filter(|_| controls.recorded(c));
+                if let Some(dir) = marked.or(cfg.record.as_ref()) {
                     let name = format!(
                         "{}_{}_{}.wav",
-                        Local::now().format("%Y%m%d-%H%M%S"),
+                        Local::now().format("%Y%m%d-%H%M%S%.3f"),
                         talkgroup
                             .map_or(e.id(), |tg| format!("TG{tg}"))
                             .replace(|ch: char| !ch.is_alphanumeric() && ch != '.', ""),
                         e.tag.replace(|ch: char| !ch.is_alphanumeric(), "_")
                     );
-                    match wav::Writer::create(&dir.join(name), AUDIO_RATE) {
-                        Ok(w) => recorders[c] = Some(w),
+                    let path = dir.join(name);
+                    match wav::Writer::create(&path, AUDIO_RATE) {
+                        Ok(w) => recorders[c] = Some((w, path)),
                         Err(err) => eprintln!("scanner: can't record: {err}"),
                     }
                 }
             }
             if open[c] {
                 open_blocks[c] += 1;
-                if let Some(w) = &mut recorders[c] {
+                if let Some((w, _)) = &mut recorders[c] {
                     to_pcm(&audio[c], volume, &mut pcm);
                     w.write(&pcm);
                 }
             } else if open_blocks[c] > 0 {
+                let recording = recorders[c].take().map(|(w, path)| {
+                    w.finish();
+                    path
+                });
                 on_event(Event::Closed {
                     channel: c,
                     secs: open_blocks[c] as f32 * block_secs,
+                    unit: row_unit[c].take(),
+                    recording,
                 });
                 open_blocks[c] = 0;
-                if let Some(w) = recorders[c].take() {
-                    w.finish();
-                }
             }
         }
         if now_playing != playing {
@@ -560,23 +745,94 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
             on_event(Event::Playing(playing));
         }
 
+        if let Some(request) = controls.replay_request.lock().unwrap().take() {
+            replay = request
+                .and_then(|path| wav::read(&path).ok())
+                .map(|samples| (samples, 0));
+        }
+        if let Some((samples, at)) = &mut replay {
+            let end = (*at + audio_len).min(samples.len());
+            pcm.clear();
+            pcm.extend_from_slice(&samples[*at..end]);
+            pcm.resize(audio_len, 0);
+            *at = end;
+            if end == samples.len() {
+                replay = None;
+            }
+        }
+        controls.replaying.store(replay.is_some(), Relaxed);
+
         if let Some(out) = &mut speaker {
             // Written every block, silence included, to keep the output running.
             let written = match playing {
-                Some(c) if !controls.muted() => {
+                _ if controls.muted() => out.write(&silence),
+                // A recording being replayed takes the place of live audio.
+                _ if replay.is_some() => out.write(&pcm),
+                Some(c) => {
                     to_pcm(&audio[c], volume, &mut pcm);
                     out.write(&pcm)
                 }
-                _ => out.write(&silence),
+                None => out.write(&silence),
             };
             if written.is_err() {
                 break;
             }
         }
+
+        // With more than one band, move on from a quiet one after a while,
+        // and from a busy one between transmissions once it has had its
+        // turn; a held channel keeps its band tuned.
+        if bands.len() > 1 {
+            let held = controls.pinned().and_then(|row| row_band[row]);
+            let in_call = |rx: &Rx| matches!(rx, Rx::P25(rx) if rx.row.is_some());
+            let busy = current.is_some() || open.iter().any(|&o| o) || bands[tuned].rxs.iter().any(in_call);
+            band_idle_blocks = if busy { 0 } else { band_idle_blocks + 1 };
+            band_blocks += 1;
+            let overstayed = band_blocks >= max_stay_blocks && playing.is_none();
+            let next = match held {
+                Some(band) => band,
+                None if band_idle_blocks >= dwell_blocks || overstayed => (tuned + 1) % bands.len(),
+                None => tuned,
+            };
+            if next != tuned {
+                // Whatever was being received here ends now.
+                for rx in &mut bands[tuned].rxs {
+                    match rx {
+                        Rx::Nfm { channel, row } => {
+                            channel.resync();
+                            open[*row] = false;
+                            row_rx[*row] = None;
+                        }
+                        Rx::P25(rx) => {
+                            if let Some(row) = rx.row {
+                                open[row] = false;
+                                row_rx[row] = None;
+                            }
+                            rx.channel.resync();
+                            rx.hang_up();
+                        }
+                    }
+                }
+                tuned = next;
+                current = None;
+                band_idle_blocks = 0;
+                band_blocks = 0;
+                if let Err(e) = input.tune(bands[tuned].center_hz, RETUNE_SETTLE_SECS) {
+                    failure = Some(e.to_string());
+                    break;
+                }
+                announce(tuned, &bands, &mut on_event);
+            }
+        }
     }
 
-    recorders.into_iter().flatten().for_each(wav::Writer::finish);
+    for (w, _) in recorders.into_iter().flatten() {
+        w.finish();
+    }
     drop(speaker);
+    if let Some(failure) = failure {
+        return Err(failure);
+    }
     if matches!(input, Input::Airspy { .. }) && !controls.stop.load(Relaxed) {
         return Err("the Airspy stopped sending samples (unplugged?)".into());
     }

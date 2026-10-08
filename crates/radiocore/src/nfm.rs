@@ -108,6 +108,23 @@ impl NfmChannel {
         }
     }
 
+    /// Forget everything in progress, as after the receiver was tuned away
+    /// and back: the samples that follow don't continue the ones before.
+    /// The noise floor estimate is kept.
+    pub fn resync(&mut self) {
+        self.carrier = false;
+        self.tone_ok = false;
+        self.tone_clean_subs = 0;
+        self.sub_clean = false;
+        self.tone_acc = Complex32::ZERO;
+        self.tone_n = 0;
+        self.dev_sq_acc = 0.0;
+        self.tone_sums.iter_mut().for_each(|v| *v = Complex32::ZERO);
+        self.dev_sq_sums.iter_mut().for_each(|v| *v = 0.0);
+        self.delay.iter_mut().for_each(|v| *v = 0.0);
+        self.hold = 0;
+    }
+
     /// Change the carrier level over the noise floor needed to open.
     pub fn set_squelch(&mut self, ratio: f32) {
         self.cfg.squelch = ratio;

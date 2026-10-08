@@ -5012,6 +5012,7 @@ dependencies = [
  "chrono",
  "gpui",
  "scanner",
+ "serde_json",
 ]
 
 [[package]]

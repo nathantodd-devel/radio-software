@@ -13,6 +13,9 @@ pub enum Kind {
         tone_hz: Option<f32>,
         narrow: bool,
     },
+    /// A P25 channel on its own frequency (conventional, not trunked),
+    /// optionally only for transmissions with a given network access code.
+    Digital { freq_hz: f64, nac: Option<u16> },
     /// A P25 talkgroup, heard on whichever of its system's frequencies
     /// carries it.
     Talkgroup { system: i64, id: u16 },
@@ -26,6 +29,10 @@ pub struct Entry {
     pub channel_id: Option<i64>,
     /// Start out ignoring this channel.
     pub skip: bool,
+    /// Interrupts whatever else is playing.
+    pub priority: bool,
+    /// Its calls are always saved, whether or not everything is.
+    pub record: bool,
     pub kind: Kind,
     pub tag: String,
     pub desc: String,
@@ -35,7 +42,7 @@ impl Entry {
     /// Frequency in MHz or talkgroup number, for display.
     pub fn id(&self) -> String {
         match self.kind {
-            Kind::Analog { freq_hz, .. } => format!("{:.4}", freq_hz / 1e6),
+            Kind::Analog { freq_hz, .. } | Kind::Digital { freq_hz, .. } => format!("{:.4}", freq_hz / 1e6),
             Kind::Talkgroup { id, .. } => format!("TG {id}"),
             Kind::OtherTalkgroups { .. } => "TG *".into(),
         }
@@ -113,6 +120,8 @@ impl Plan {
             let entry = Entry {
                 channel_id: None,
                 skip: false,
+                priority: false,
+                record: false,
                 kind: Kind::OtherTalkgroups { system },
                 tag: "Other".into(),
                 desc: "Talkgroups not in the database".into(),
@@ -121,46 +130,99 @@ impl Plan {
         }
     }
 
-    /// Every frequency that has to fall inside the tuned band.
-    pub fn frequencies(&self) -> impl Iterator<Item = f64> + '_ {
-        let analog = self.entries.iter().filter_map(|e| match e.kind {
-            Kind::Analog { freq_hz, .. } => Some(freq_hz),
+    /// Everything that needs a receiver: (frequency, what to listen for).
+    fn listeners(&self) -> impl Iterator<Item = (f64, Listener)> + '_ {
+        let fixed = self.entries.iter().enumerate().filter_map(|(row, e)| match e.kind {
+            Kind::Analog { freq_hz, .. } | Kind::Digital { freq_hz, .. } => Some((freq_hz, Listener::Row(row))),
             _ => None,
         });
-        analog.chain(self.p25.iter().map(|f| f.freq_hz))
+        fixed.chain(
+            self.p25
+                .iter()
+                .map(|f| (f.freq_hz, Listener::Trunked { system: f.system })),
+        )
     }
 
-    /// Lowest frequency, highest frequency and the one to tune to, in Hz.
+    /// Every frequency the plan listens on.
+    pub fn frequencies(&self) -> impl Iterator<Item = f64> + '_ {
+        self.listeners().map(|(freq_hz, _)| freq_hz)
+    }
+
+    /// Lowest frequency, highest frequency and their midpoint, in Hz.
     pub fn span(&self) -> (f64, f64, f64) {
         let (lo, hi) = self
             .frequencies()
             .fold((f64::MAX, f64::MIN), |(lo, hi), f| (lo.min(f), hi.max(f)));
-        // Channels sit on a raster of their own; tune on the bin grid or
-        // half a bin off it, whichever lands channels closer to bin centres.
-        let on_grid = ((lo + hi) / 2.0 / BIN_HZ).round() * BIN_HZ;
-        let worst = |center: f64| {
-            self.frequencies()
-                .map(|f| ((f - center) / BIN_HZ).fract().abs())
-                .map(|x| x.min(1.0 - x))
-                .fold(0.0, f64::max)
-        };
-        let off_grid = on_grid + BIN_HZ / 2.0;
-        (
-            lo,
-            hi,
-            if worst(off_grid) < worst(on_grid) {
+        (lo, hi, (lo + hi) / 2.0)
+    }
+
+    /// Split the plan into as few tunings as cover every frequency, each no
+    /// wider than `max_span_hz`, lowest first.
+    pub fn bands(&self, max_span_hz: f64) -> Vec<Band> {
+        let mut listeners: Vec<(f64, Listener)> = self.listeners().collect();
+        listeners.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut bands: Vec<Band> = Vec::new();
+        for (freq_hz, listener) in listeners {
+            match bands.last_mut() {
+                Some(band) if freq_hz - band.lo_hz <= max_span_hz => {
+                    band.hi_hz = freq_hz;
+                    band.listeners.push((freq_hz, listener));
+                }
+                _ => bands.push(Band {
+                    lo_hz: freq_hz,
+                    hi_hz: freq_hz,
+                    center_hz: 0.0,
+                    listeners: vec![(freq_hz, listener)],
+                }),
+            }
+        }
+        for band in &mut bands {
+            // Channels sit on a raster of their own; tune on the bin grid or
+            // half a bin off it, whichever lands channels closer to bin centres.
+            let on_grid = ((band.lo_hz + band.hi_hz) / 2.0 / BIN_HZ).round() * BIN_HZ;
+            let worst = |center: f64| {
+                let off = |f: f64| ((f - center) / BIN_HZ).fract().abs();
+                band.listeners
+                    .iter()
+                    .map(|(f, _)| off(*f).min(1.0 - off(*f)))
+                    .fold(0.0, f64::max)
+            };
+            let off_grid = on_grid + BIN_HZ / 2.0;
+            band.center_hz = if worst(off_grid) < worst(on_grid) {
                 off_grid
             } else {
                 on_grid
-            },
-        )
+            };
+        }
+        bands
     }
+}
+
+/// What a receiver on one frequency is listening for.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Listener {
+    /// The analog or digital channel of this plan entry.
+    Row(usize),
+    /// Calls on a trunked P25 system, for any of its talkgroups.
+    Trunked { system: i64 },
+}
+
+/// Frequencies near enough to each other to be received in one tuning.
+pub struct Band {
+    pub lo_hz: f64,
+    pub hi_hz: f64,
+    /// The frequency to tune to.
+    pub center_hz: f64,
+    /// (frequency, what to listen for), lowest first.
+    pub listeners: Vec<(f64, Listener)>,
 }
 
 fn entry(kind: Kind, tag: &str, desc: &str) -> Entry {
     Entry {
         channel_id: None,
         skip: false,
+        priority: false,
+        record: false,
         kind,
         tag: tag.to_string(),
         desc: desc.to_string(),
@@ -197,6 +259,16 @@ fn native(text: &str, name: &str) -> Result<Plan, String> {
                 plan.entries.push(entry(Kind::Talkgroup { system: 0, id }, tag, desc));
             }
             _ if cols.len() >= 4 => {
+                let (tag, desc) = text_cols(3);
+                if cols[2] == "p25" {
+                    let nac = match cols[1] {
+                        "" | "-" => None,
+                        n => Some(u16::from_str_radix(n, 16).map_err(|_| bad("bad NAC (three hex digits)"))?),
+                    };
+                    let freq_hz = mhz(cols[0])?;
+                    plan.entries.push(entry(Kind::Digital { freq_hz, nac }, tag, desc));
+                    continue;
+                }
                 let tone_hz = match cols[1] {
                     "" | "-" => None,
                     t => Some(t.parse().map_err(|_| bad("bad CTCSS tone"))?),
@@ -204,9 +276,8 @@ fn native(text: &str, name: &str) -> Result<Plan, String> {
                 let narrow = match cols[2] {
                     "n" => true,
                     "w" => false,
-                    _ => return Err(bad("width must be w or n")),
+                    _ => return Err(bad("width must be w (wide FM), n (narrow FM) or p25")),
                 };
-                let (tag, desc) = text_cols(3);
                 plan.entries.push(entry(
                     Kind::Analog {
                         freq_hz: mhz(cols[0])?,
@@ -219,7 +290,7 @@ fn native(text: &str, name: &str) -> Result<Plan, String> {
             }
             _ => {
                 return Err(bad(
-                    "expected `freq_mhz, ctcss_hz, width, tag[, description]`, `p25, freq_mhz` or `tg, id, tag[, description]`",
+                    "expected `freq_mhz, ctcss_hz, w|n, tag[, description]`, `freq_mhz, nac, p25, tag[, description]`, `p25, freq_mhz` or `tg, id, tag[, description]`",
                 ));
             }
         }
@@ -270,14 +341,11 @@ fn count_note(notes: &mut Vec<String>, count: usize, what: &str) {
 fn radioreference_conventional(text: &str, name: &str) -> Result<(Plan, Vec<String>), String> {
     let (mut plan, mut other_modes, mut coded) = (Plan::default(), 0, 0);
     for (lineno, get) in csv_rows(text) {
-        let narrow = match get("Mode").to_ascii_uppercase().as_str() {
-            "FM" => false,
-            "FMN" => true,
-            _ => {
-                other_modes += 1;
-                continue;
-            }
-        };
+        let mode = get("Mode").to_ascii_uppercase();
+        if !matches!(mode.as_str(), "FM" | "FMN" | "P25") {
+            other_modes += 1;
+            continue;
+        }
         let freq = get("Frequency Output");
         let freq_hz = freq
             .parse::<f64>()
@@ -285,28 +353,34 @@ fn radioreference_conventional(text: &str, name: &str) -> Result<(Plan, Vec<Stri
             * 1e6;
         // "114.8 PL", "CSQ", "023 DPL", "293 NAC" or nothing.
         let tone = get("PL Output Tone").to_ascii_uppercase();
-        let tone_hz = match tone.split_once(' ') {
-            Some((hz, "PL")) => hz.parse().ok(),
-            Some(_) => {
-                coded += 1;
-                None
-            }
-            None => None,
-        };
-        let (tag, desc) = (get("Alpha Tag"), get("Description"));
-        let tag = if tag.is_empty() { desc.clone() } else { tag };
-        plan.entries.push(entry(
+        let kind = if mode == "P25" {
+            let nac = tone.strip_suffix(" NAC").and_then(|n| u16::from_str_radix(n, 16).ok());
+            Kind::Digital { freq_hz, nac }
+        } else {
+            let tone_hz = match tone.split_once(' ') {
+                Some((hz, "PL")) => hz.parse().ok(),
+                Some(_) => {
+                    coded += 1;
+                    None
+                }
+                None => None,
+            };
             Kind::Analog {
                 freq_hz,
                 tone_hz,
-                narrow,
-            },
-            &tag,
-            &desc,
-        ));
+                narrow: mode == "FMN",
+            }
+        };
+        let (tag, desc) = (get("Alpha Tag"), get("Description"));
+        let tag = if tag.is_empty() { desc.clone() } else { tag };
+        plan.entries.push(entry(kind, &tag, &desc));
     }
     let mut notes = Vec::new();
-    count_note(&mut notes, other_modes, "channels left out: not analog FM");
+    count_note(
+        &mut notes,
+        other_modes,
+        "channels left out: not analog FM or unencrypted P25",
+    );
     count_note(
         &mut notes,
         coded,
@@ -387,9 +461,11 @@ mod tests {
                    488.31250,491.31250,WIL123,San Mateo PD,\"Dispatch, primary\",SMPD 1,114.8 PL,114.8 PL,FM,RM,Law Dispatch\n\
                    154.34000,,,Fire,Coast,Coast Fire,CSQ,,FMN,RM,Fire Dispatch\n\
                    460.02500,,,Sheriff,Car to car,SO C2C,023 DPL,,FMN,M,Law Tac\n\
-                   482.88750,,,San Mateo PD,Channel 4,SMPD 4,9EE NAC,,P25E,RM,Law Tac\n";
+                   482.88750,,,San Mateo PD,Channel 4,SMPD 4,9EE NAC,,P25E,RM,Law Tac\n\
+                   453.10000,,,Example PD,Digital,EX PD 3,293 NAC,,P25,RM,Law Tac\n";
         let (plan, notes) = Plan::parse(csv, "test", None).unwrap();
-        assert_eq!(plan.entries.len(), 3);
+        assert_eq!(plan.entries.len(), 4);
+        assert!(matches!(plan.entries[3].kind, Kind::Digital { nac: Some(0x293), .. }));
         assert!(
             matches!(plan.entries[0].kind, Kind::Analog { freq_hz, tone_hz: Some(t), narrow: false } if freq_hz == 488.3125e6 && t == 114.8)
         );
@@ -404,6 +480,31 @@ mod tests {
         ));
         assert!(matches!(plan.entries[2].kind, Kind::Analog { tone_hz: None, .. }));
         assert_eq!(notes.len(), 2);
+    }
+
+    #[test]
+    fn groups_frequencies_into_bands() {
+        let text = "154.1, 114.8, n, Fire, Fire\n488.3125, 114.8, w, PD 1, PD\n482.5, -, w, PD 2, PD\n\
+                    453.1, 293, p25, PD 3, Digital\np25, 772.03125\np25, 773.48125\ntg, 865, SO, Sheriff\n";
+        let (plan, _) = Plan::parse(text, "test", None).unwrap();
+        assert!(matches!(plan.entries[3].kind, Kind::Digital { nac: Some(0x293), .. }));
+        let bands = plan.bands(9e6);
+        let rows: Vec<Vec<Listener>> = bands
+            .iter()
+            .map(|b| b.listeners.iter().map(|l| l.1).collect())
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                vec![Listener::Row(0)],
+                vec![Listener::Row(3)],
+                vec![Listener::Row(2), Listener::Row(1)],
+                vec![Listener::Trunked { system: 0 }; 2],
+            ]
+        );
+        // P25 frequencies sit half a bin off the grid; the tuning follows.
+        assert_eq!(bands[3].center_hz, 772_756_750.0);
+        assert_eq!(plan.bands(400e6).len(), 2);
     }
 
     #[test]
