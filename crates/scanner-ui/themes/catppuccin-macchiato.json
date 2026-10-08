@@ -1,0 +1,12 @@
+{
+  "background": "#24273a",
+  "panel": "#1e2030",
+  "raised": "#363a4f",
+  "border": "#494d64",
+  "text": "#cad3f5",
+  "muted": "#a5adcb",
+  "accent": "#a6da95",
+  "hold": "#f5a97f",
+  "priority": "#8aadf4",
+  "error": "#ed8796"
+}

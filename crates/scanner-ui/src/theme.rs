@@ -1,5 +1,5 @@
-//! The colours of the app, and themes that change them: JSON files in the
-//! `themes` directory beside the channel database.
+//! The colours of the app, and themes that change them: a few built in,
+//! and any JSON files in the `themes` directory beside the channel database.
 //!
 //! A theme file is one object giving any of the colours below as
 //! `"#rrggbb"`; the ones it leaves out keep their default.
@@ -13,8 +13,21 @@ use std::sync::RwLock;
 
 use scanner::db::Db;
 
-/// Name of the theme that is built in.
+/// Name of the theme the app starts out with.
 pub const DEFAULT: &str = "Default";
+
+/// The other themes that come with the app, as (name, theme file). The
+/// Catppuccin ones use that project's palettes (catppuccin.com).
+const BUILT_IN: &[(&str, &str)] = &[
+    ("Light", include_str!("../themes/light.json")),
+    ("Catppuccin Latte", include_str!("../themes/catppuccin-latte.json")),
+    ("Catppuccin Frappé", include_str!("../themes/catppuccin-frappe.json")),
+    (
+        "Catppuccin Macchiato",
+        include_str!("../themes/catppuccin-macchiato.json"),
+    ),
+    ("Catppuccin Mocha", include_str!("../themes/catppuccin-mocha.json")),
+];
 
 #[derive(Clone, Copy, Debug)]
 pub struct Theme {
@@ -108,33 +121,41 @@ pub fn dir() -> PathBuf {
     Db::default_path().with_file_name("themes")
 }
 
-/// The themes that can be chosen: the built-in one, then the files found.
+/// The themes that can be chosen: the ones that come with the app, then
+/// the files found.
 pub fn available() -> Vec<String> {
-    let mut names: Vec<String> = std::fs::read_dir(dir())
+    let mut names: Vec<String> = std::iter::once(DEFAULT)
+        .chain(BUILT_IN.iter().map(|(name, _)| *name))
+        .map(String::from)
+        .collect();
+    let mut files: Vec<String> = std::fs::read_dir(dir())
         .into_iter()
         .flatten()
         .filter_map(|entry| Some(entry.ok()?.path()))
         .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
         .filter_map(|path| Some(path.file_stem()?.to_str()?.to_string()))
+        // A file named like a built-in theme replaces it rather than adding one.
+        .filter(|name| !names.contains(name))
         .collect();
-    names.sort();
-    names.insert(0, DEFAULT.to_string());
+    files.sort();
+    names.extend(files);
     names
 }
 
-/// Switch to the theme called `name`. If its file can't be used, says why
-/// and switches to the default.
+/// Switch to the theme called `name`: the file of that name if there is
+/// one, otherwise the theme of that name that comes with the app. If it
+/// can't be used, says why and switches to the default.
 pub fn select(name: &str) -> Result<(), String> {
-    let loaded = if name == DEFAULT {
-        Ok(Theme::DEFAULT)
-    } else {
-        // Names come from file names in `dir()`, never paths.
-        let path = dir()
-            .join(Path::new(name).file_name().unwrap_or_default())
-            .with_extension("json");
-        std::fs::read_to_string(&path)
-            .map_err(|e| format!("{}: {e}", path.display()))
-            .and_then(|json| Theme::parse(&json, &path.display().to_string()))
+    // Names come from file names in `dir()`, never paths.
+    let path = dir()
+        .join(Path::new(name).file_name().unwrap_or_default())
+        .with_extension("json");
+    let built_in = BUILT_IN.iter().find(|(built_in, _)| *built_in == name);
+    let loaded = match (std::fs::read_to_string(&path), built_in) {
+        (Ok(json), _) => Theme::parse(&json, &path.display().to_string()),
+        (Err(_), Some((name, json))) => Theme::parse(json, name),
+        (Err(_), None) if name == DEFAULT => Ok(Theme::DEFAULT),
+        (Err(e), None) => Err(format!("{}: {e}", path.display())),
     };
     *CURRENT.write().unwrap() = *loaded.as_ref().unwrap_or(&Theme::DEFAULT);
     loaded.map(|_| ())
@@ -156,7 +177,18 @@ mod tests {
         );
         assert!(Theme::parse(r##"{ "text": "white" }"##, "t").is_err());
         assert!(Theme::parse("[]", "t").is_err());
-        // The example shipped in the repository stays valid.
-        Theme::parse(include_str!("../themes/light.json"), "light.json").unwrap();
+        // Every theme that comes with the app is valid and sets every colour.
+        for (name, json) in BUILT_IN {
+            Theme::parse(json, name).unwrap();
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(json)
+                    .unwrap()
+                    .as_object()
+                    .unwrap()
+                    .len(),
+                10
+            );
+        }
+        assert!(available().starts_with(&["Default".to_string(), "Light".to_string()]));
     }
 }
