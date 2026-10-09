@@ -134,6 +134,36 @@ struct ScannerView {
     /// The form for a system or channel, while one is being edited.
     editor: Option<editor::Editor>,
     editor_focus: FocusHandle,
+    /// What the channel list and activity log are narrowed down to.
+    filter: Filter,
+    filter_focus: FocusHandle,
+}
+
+/// Which channels and calls to show.
+#[derive(Default)]
+struct Filter {
+    /// Words that must all appear in a channel's number, name or description.
+    query: String,
+    /// Only channels with a transmission on them right now.
+    active_only: bool,
+    /// Only channels that have been heard since the scan started.
+    heard_only: bool,
+}
+
+impl Filter {
+    fn is_set(&self) -> bool {
+        !self.query.trim().is_empty() || self.active_only || self.heard_only
+    }
+
+    /// Whether every word of the query is somewhere in `text`, in any
+    /// letter case.
+    fn matches(&self, text: &str) -> bool {
+        let text = text.to_lowercase();
+        self.query
+            .to_lowercase()
+            .split_whitespace()
+            .all(|word| text.contains(word))
+    }
 }
 
 /// What has been typed into the open theme list, and where in it the
@@ -161,6 +191,8 @@ impl ScannerView {
             theme_focus: cx.focus_handle(),
             editor: None,
             editor_focus: cx.focus_handle(),
+            filter: Filter::default(),
+            filter_focus: cx.focus_handle(),
         };
         match Db::open(&Db::default_path()) {
             Ok(db) => view.db = Some(db),
@@ -754,6 +786,112 @@ impl ScannerView {
             })
     }
 
+    /// Whether the filter lets a channel be shown.
+    fn shows_channel(&self, c: usize, session: &Session, live: &Live) -> bool {
+        let e = &session.plan.entries[c];
+        (!self.filter.active_only || live.open[c])
+            && (!self.filter.heard_only || live.calls[c] > 0)
+            && self.filter.matches(&format!("{} {} {}", e.id(), e.tag, e.desc))
+    }
+
+    /// Whether the filter's words let a call in the activity log be shown.
+    fn shows_call(&self, call: &session::Call, session: &Session) -> bool {
+        let e = &session.plan.entries[call.channel];
+        let talkgroup = call.talkgroup.map_or(String::new(), |tg| format!("talkgroup {tg}"));
+        let unit = call.unit.map_or(String::new(), |unit| format!("unit {unit}"));
+        self.filter
+            .matches(&format!("{} {} {} {talkgroup} {unit}", e.id(), e.tag, e.desc))
+    }
+
+    /// The search box and toggles above the channel list. `shown` of
+    /// `total` channels pass the filter.
+    fn filter_bar(&self, shown: usize, total: usize, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let typing = self.filter_focus.is_focused(window);
+        let (active_only, heard_only) = (self.filter.active_only, self.filter.heard_only);
+        let query = self.filter.query.clone();
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap_2()
+            .px_4()
+            .py_2()
+            .border_b_1()
+            .border_color(rgb(theme().border))
+            .child(
+                div()
+                    .id("filter")
+                    .track_focus(&self.filter_focus)
+                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                        match event.keystroke.key.as_str() {
+                            // Escape clears the search and gives the keyboard back.
+                            "escape" => {
+                                this.filter.query.clear();
+                                window.blur();
+                            }
+                            "enter" => window.blur(),
+                            _ => {
+                                if !editor::type_into(&mut this.filter.query, event, cx) {
+                                    return;
+                                }
+                            }
+                        }
+                        cx.stop_propagation();
+                        cx.notify();
+                    }))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        window.focus(&this.filter_focus);
+                        cx.notify();
+                    }))
+                    .flex_1()
+                    .px_2()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(if typing { theme().accent } else { theme().border }))
+                    .bg(rgb(theme().panel))
+                    .text_sm()
+                    .cursor_text()
+                    .child(match (query.is_empty(), typing) {
+                        (true, false) => div()
+                            .text_color(rgb(theme().muted))
+                            .child("Search channels and calls: name, frequency, talkgroup, unit…"),
+                        (_, true) => div().child(format!("{query}▏")),
+                        (false, false) => div().child(query),
+                    }),
+            )
+            .child(
+                button("filter-active", "Active", active_only, theme().accent).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        this.filter.active_only = !active_only;
+                        cx.notify();
+                    },
+                )),
+            )
+            .child(
+                button("filter-heard", "Heard", heard_only, theme().accent).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        this.filter.heard_only = !heard_only;
+                        cx.notify();
+                    },
+                )),
+            )
+            .when(self.filter.is_set(), |bar| {
+                bar.child(
+                    div()
+                        .flex_none()
+                        .text_sm()
+                        .text_color(rgb(theme().muted))
+                        .child(format!("{shown} of {total}")),
+                )
+                .child(
+                    button("filter-clear", "Clear", false, theme().accent).on_click(cx.listener(|this, _, _, cx| {
+                        this.filter = Filter::default();
+                        cx.notify();
+                    })),
+                )
+            })
+    }
+
     fn activity(&self, session: &Session, live: &Live, cx: &mut Context<Self>) -> impl IntoElement {
         let replaying = session.controls.replaying();
         div()
@@ -794,68 +932,74 @@ impl ScannerView {
                         .child("Nothing heard yet."),
                 )
             })
-            .children(live.log.iter().enumerate().map(|(i, call)| {
-                let entry = &session.plan.entries[call.channel];
-                let mut who = match (&entry.kind, call.talkgroup) {
-                    (Kind::OtherTalkgroups { .. }, Some(talkgroup)) => format!("Talkgroup {talkgroup}"),
-                    (_, _) => entry.tag.clone(),
-                };
-                if let Some(unit) = call.unit {
-                    who.push_str(&format!("  ·  unit {unit}"));
-                }
-                // Finished calls can be played back from their recording.
-                let replay = match &call.recording {
-                    Some(recording) => {
-                        let recording = recording.clone();
-                        button(("replay", i), "▶", false, theme().priority).on_click(cx.listener(
-                            move |this, _, _, cx| {
-                                if let Some(s) = &this.session {
-                                    s.controls.replay(recording.clone());
-                                }
-                                cx.notify();
-                            },
-                        ))
-                    }
-                    None => div().id(("no-replay", i)).flex_none().w(px(22.)),
-                };
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .px_4()
-                    .py_1()
-                    .text_sm()
-                    .child(replay)
-                    .child(
+            .children(
+                live.log
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, call)| self.shows_call(call, session))
+                    .map(|(i, call)| {
+                        let entry = &session.plan.entries[call.channel];
+                        let mut who = match (&entry.kind, call.talkgroup) {
+                            (Kind::OtherTalkgroups { .. }, Some(talkgroup)) => format!("Talkgroup {talkgroup}"),
+                            (_, _) => entry.tag.clone(),
+                        };
+                        if let Some(unit) = call.unit {
+                            who.push_str(&format!("  ·  unit {unit}"));
+                        }
+                        // Finished calls can be played back from their recording.
+                        let replay = match &call.recording {
+                            Some(recording) => {
+                                let recording = recording.clone();
+                                button(("replay", i), "▶", false, theme().priority).on_click(cx.listener(
+                                    move |this, _, _, cx| {
+                                        if let Some(s) = &this.session {
+                                            s.controls.replay(recording.clone());
+                                        }
+                                        cx.notify();
+                                    },
+                                ))
+                            }
+                            None => div().id(("no-replay", i)).flex_none().w(px(22.)),
+                        };
                         div()
-                            .flex_none()
-                            .text_color(rgb(theme().muted))
-                            .child(call.time.clone()),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .truncate()
-                            .text_color(rgb(if call.played { theme().text } else { theme().muted }))
-                            .child(who),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_color(rgb(theme().muted))
-                            .child(format!("{:+.0} dB", call.snr_db)),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .w(px(34.))
-                            .text_color(rgb(theme().muted))
-                            .child(match call.secs {
-                                Some(secs) => format!("{secs:.0}s"),
-                                None => "live".into(),
-                            }),
-                    )
-            }))
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .px_4()
+                            .py_1()
+                            .text_sm()
+                            .child(replay)
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .text_color(rgb(theme().muted))
+                                    .child(call.time.clone()),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .truncate()
+                                    .text_color(rgb(if call.played { theme().text } else { theme().muted }))
+                                    .child(who),
+                            )
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .text_color(rgb(theme().muted))
+                                    .child(format!("{:+.0} dB", call.snr_db)),
+                            )
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .w(px(34.))
+                                    .text_color(rgb(theme().muted))
+                                    .child(match call.secs {
+                                        Some(secs) => format!("{secs:.0}s"),
+                                        None => "live".into(),
+                                    }),
+                            )
+                    }),
+            )
     }
 
     /// Themes whose names contain what has been typed, in any letter case.
@@ -1165,6 +1309,8 @@ impl Render for ScannerView {
             }
             Some(session) => {
                 let live = session.live.lock().unwrap();
+                let total = session.plan.entries.len();
+                let shown: Vec<usize> = (0..total).filter(|&c| self.shows_channel(c, session, &live)).collect();
                 main.child(self.now_playing(session, &live))
                     .when_some(self.error.clone(), |main, error| {
                         main.child(
@@ -1177,6 +1323,7 @@ impl Render for ScannerView {
                                 .child(error),
                         )
                     })
+                    .child(self.filter_bar(shown.len(), total, window, cx))
                     .child(
                         div()
                             .flex_1()
@@ -1190,10 +1337,16 @@ impl Render for ScannerView {
                                     .h_full()
                                     .overflow_y_scroll()
                                     .child(section_title("Channels"))
-                                    .children(
-                                        (0..session.plan.entries.len())
-                                            .map(|c| self.channel_row(c, roomy, session, &live, cx)),
-                                    ),
+                                    .when(shown.is_empty(), |list| {
+                                        list.child(
+                                            div()
+                                                .px_4()
+                                                .text_sm()
+                                                .text_color(rgb(theme().muted))
+                                                .child("No channels match the filter."),
+                                        )
+                                    })
+                                    .children(shown.iter().map(|&c| self.channel_row(c, roomy, session, &live, cx))),
                             )
                             .when(width >= px(ACTIVITY_MIN_WIDTH), |body| {
                                 body.child(self.activity(session, &live, cx))
@@ -1351,4 +1504,24 @@ fn main() {
         cx.on_window_closed(|cx| cx.quit()).detach();
         cx.activate(true);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn filter_needs_every_word() {
+        let filter = |query: &str| Filter {
+            query: query.into(),
+            ..Filter::default()
+        };
+        let channel = "488.3125 San Mateo PD1 San Mateo Police Dispatch";
+        assert!(filter("").matches(channel));
+        assert!(filter("  ").matches(channel));
+        assert!(filter("mateo DISPATCH").matches(channel));
+        assert!(filter("488.3").matches(channel));
+        assert!(!filter("mateo fire").matches(channel));
+        assert!(!filter("").is_set() && filter("x").is_set());
+    }
 }
