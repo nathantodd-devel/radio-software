@@ -82,6 +82,22 @@ pub struct Db {
     conn: Connection,
 }
 
+/// How a kind of channel is stored: frequency, tone, narrow, talkgroup,
+/// whether it is P25, and NAC. `None` for the catch-all entry, which isn't.
+#[allow(clippy::type_complexity)]
+fn columns(kind: &Kind) -> Option<(Option<f64>, Option<f32>, bool, Option<u16>, bool, Option<u16>)> {
+    match *kind {
+        Kind::Analog {
+            freq_hz,
+            tone_hz,
+            narrow,
+        } => Some((Some(freq_hz), tone_hz, narrow, None, false, None)),
+        Kind::Digital { freq_hz, nac } => Some((Some(freq_hz), None, false, None, true, nac)),
+        Kind::Talkgroup { id, .. } => Some((None, None, false, Some(id), true, None)),
+        Kind::OtherTalkgroups { .. } => None,
+    }
+}
+
 fn sql<T>(result: rusqlite::Result<T>) -> Result<T, String> {
     result.map_err(|e| format!("channel database: {e}"))
 }
@@ -197,15 +213,8 @@ impl Db {
         ))?;
         let system = tx.last_insert_rowid();
         for (position, e) in plan.entries.iter().enumerate() {
-            let (freq_hz, tone_hz, narrow, talkgroup, p25, nac) = match e.kind {
-                Kind::Analog {
-                    freq_hz,
-                    tone_hz,
-                    narrow,
-                } => (Some(freq_hz), tone_hz, narrow, None, false, None),
-                Kind::Digital { freq_hz, nac } => (Some(freq_hz), None, false, None, true, nac),
-                Kind::Talkgroup { id, .. } => (None, None, false, Some(id), true, None),
-                Kind::OtherTalkgroups { .. } => continue,
+            let Some((freq_hz, tone_hz, narrow, talkgroup, p25, nac)) = columns(&e.kind) else {
+                continue;
             };
             sql(tx.execute(
                 "INSERT INTO channels
@@ -241,6 +250,117 @@ impl Db {
 
     pub fn remove_system(&mut self, system: i64) -> Result<(), String> {
         sql(self.conn.execute("DELETE FROM systems WHERE id = ?1", [system])).map(|_| ())
+    }
+
+    pub fn rename_system(&self, system: i64, name: &str, location: &str) -> Result<(), String> {
+        sql(self.conn.execute(
+            "UPDATE systems SET name = ?2, location = ?3 WHERE id = ?1",
+            params![system, name, location],
+        ))
+        .map(|_| ())
+    }
+
+    /// The frequencies, in Hz, a system's P25 talkgroups are heard on.
+    pub fn p25_frequencies(&self, system: i64) -> Result<Vec<f64>, String> {
+        let mut stmt = sql(self
+            .conn
+            .prepare("SELECT freq_hz FROM p25_frequencies WHERE system_id = ?1 ORDER BY freq_hz"))?;
+        sql(sql(stmt.query_map([system], |r| r.get(0)))?.collect())
+    }
+
+    pub fn set_p25_frequencies(&mut self, system: i64, freqs_hz: &[f64]) -> Result<(), String> {
+        let tx = sql(self.conn.transaction())?;
+        sql(tx.execute("DELETE FROM p25_frequencies WHERE system_id = ?1", [system]))?;
+        for freq_hz in freqs_hz {
+            sql(tx.execute(
+                "INSERT INTO p25_frequencies (system_id, freq_hz) VALUES (?1, ?2)",
+                params![system, freq_hz],
+            ))?;
+        }
+        sql(tx.commit())
+    }
+
+    /// One channel and the system it belongs to.
+    pub fn channel(&self, channel: i64) -> Result<(i64, Entry), String> {
+        let system: i64 = sql(self
+            .conn
+            .query_row("SELECT system_id FROM channels WHERE id = ?1", [channel], |r| r.get(0)))?;
+        let entry = self
+            .plan(&[system])?
+            .entries
+            .into_iter()
+            .find(|e| e.channel_id == Some(channel));
+        Ok((system, entry.ok_or("channel not found")?))
+    }
+
+    /// Store a channel: a new one at the end of `system` if it has no
+    /// `channel_id`, otherwise the changes to the one it names. Returns the
+    /// channel's id.
+    pub fn save_channel(&self, system: i64, e: &Entry) -> Result<i64, String> {
+        let (freq_hz, tone_hz, narrow, talkgroup, p25, nac) =
+            columns(&e.kind).ok_or("not a channel that can be stored")?;
+        match e.channel_id {
+            Some(id) => {
+                sql(self.conn.execute(
+                    "UPDATE channels SET freq_hz = ?2, tone_hz = ?3, narrow = ?4, talkgroup = ?5, p25 = ?6, nac = ?7,
+                                         tag = ?8, description = ?9, skip = ?10, priority = ?11, record = ?12
+                     WHERE id = ?1",
+                    params![
+                        id, freq_hz, tone_hz, narrow, talkgroup, p25, nac, e.tag, e.desc, e.skip, e.priority, e.record
+                    ],
+                ))?;
+                Ok(id)
+            }
+            None => {
+                sql(self.conn.execute(
+                    "INSERT INTO channels
+                        (system_id, position, freq_hz, tone_hz, narrow, talkgroup, p25, nac, tag, description,
+                         skip, priority, record)
+                     VALUES (?1, (SELECT COALESCE(MAX(position), -1) + 1 FROM channels WHERE system_id = ?1),
+                             ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                    params![
+                        system, freq_hz, tone_hz, narrow, talkgroup, p25, nac, e.tag, e.desc, e.skip, e.priority,
+                        e.record
+                    ],
+                ))?;
+                Ok(self.conn.last_insert_rowid())
+            }
+        }
+    }
+
+    pub fn delete_channel(&self, channel: i64) -> Result<(), String> {
+        sql(self.conn.execute("DELETE FROM channels WHERE id = ?1", [channel])).map(|_| ())
+    }
+
+    /// Swap a channel with the one before it in its system (`up`) or the
+    /// one after; does nothing at the end of the list. Order is what decides
+    /// which channel plays when several are active.
+    pub fn move_channel(&mut self, channel: i64, up: bool) -> Result<(), String> {
+        let tx = sql(self.conn.transaction())?;
+        let (system, position): (i64, i64) = sql(tx.query_row(
+            "SELECT system_id, position FROM channels WHERE id = ?1",
+            [channel],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        ))?;
+        let neighbour = if up {
+            "SELECT id, position FROM channels WHERE system_id = ?1 AND position < ?2 ORDER BY position DESC LIMIT 1"
+        } else {
+            "SELECT id, position FROM channels WHERE system_id = ?1 AND position > ?2 ORDER BY position LIMIT 1"
+        };
+        let other: Option<(i64, i64)> = sql(tx
+            .query_row(neighbour, params![system, position], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional())?;
+        if let Some((other, other_position)) = other {
+            sql(tx.execute(
+                "UPDATE channels SET position = ?2 WHERE id = ?1",
+                params![channel, other_position],
+            ))?;
+            sql(tx.execute(
+                "UPDATE channels SET position = ?2 WHERE id = ?1",
+                params![other, position],
+            ))?;
+        }
+        sql(tx.commit())
     }
 
     /// Remember whether a channel is to be ignored.
@@ -400,6 +520,61 @@ mod tests {
         assert!(!plan.entries[0].priority);
         assert_eq!(upgraded.systems().unwrap().len(), 1);
         drop(upgraded);
+
+        // Editing: a new system, channels added, changed, reordered, removed.
+        let mut db = Db::open(&path).unwrap();
+        let edited = db.add_system("Mine", "Home", &Plan::default()).unwrap();
+        db.rename_system(edited, "Renamed", "Away").unwrap();
+        let channel = |tag: &str, kind: Kind| Entry {
+            channel_id: None,
+            skip: false,
+            priority: false,
+            record: false,
+            kind,
+            tag: tag.into(),
+            desc: String::new(),
+        };
+        let fm = |freq_hz| Kind::Analog {
+            freq_hz,
+            tone_hz: None,
+            narrow: true,
+        };
+        let a = db.save_channel(edited, &channel("A", fm(155.0e6))).unwrap();
+        let b = db.save_channel(edited, &channel("B", fm(155.1e6))).unwrap();
+        let c = db
+            .save_channel(edited, &channel("C", Kind::Talkgroup { system: 0, id: 42 }))
+            .unwrap();
+        db.set_p25_frequencies(edited, &[771.0e6, 772.0e6]).unwrap();
+        let tags =
+            |db: &Db| -> Vec<String> { db.plan(&[edited]).unwrap().entries.into_iter().map(|e| e.tag).collect() };
+        assert_eq!(tags(&db), ["A", "B", "C", "Other"]);
+        db.move_channel(c, true).unwrap();
+        db.move_channel(a, true).unwrap();
+        db.move_channel(a, false).unwrap();
+        // The catch-all entry follows the system's last talkgroup.
+        assert_eq!(tags(&db), ["C", "Other", "A", "B"]);
+        let (system, mut entry) = db.channel(b).unwrap();
+        assert_eq!(system, edited);
+        entry.tag = "B2".into();
+        entry.kind = Kind::Digital {
+            freq_hz: 453.1e6,
+            nac: Some(0x293),
+        };
+        assert_eq!(db.save_channel(edited, &entry).unwrap(), b);
+        db.delete_channel(a).unwrap();
+        assert_eq!(tags(&db), ["C", "Other", "B2"]);
+        assert!(matches!(
+            db.channel(b).unwrap().1.kind,
+            Kind::Digital { nac: Some(0x293), .. }
+        ));
+        assert_eq!(db.p25_frequencies(edited).unwrap(), [771.0e6, 772.0e6]);
+        let renamed = db.systems().unwrap().into_iter().find(|s| s.id == edited).unwrap();
+        assert_eq!(
+            (renamed.name.as_str(), renamed.location.as_str(), renamed.channels),
+            ("Renamed", "Away", 2)
+        );
+        db.remove_system(edited).unwrap();
+        drop(db);
 
         // Skips persist; reopening doesn't seed a second time.
         let mut db = Db::open(&path).unwrap();

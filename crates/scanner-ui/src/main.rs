@@ -3,6 +3,7 @@
 // On Windows, don't open a console window alongside the app.
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+mod editor;
 mod session;
 mod theme;
 
@@ -26,7 +27,7 @@ const METER_FULL_DB: f32 = 40.0;
 const REFRESH: Duration = Duration::from_millis(100);
 
 const TITLE: &str = "Airspy Scanner";
-const DEFAULT_SIZE: (f32, f32) = (1410., 760.);
+const DEFAULT_SIZE: (f32, f32) = (1460., 760.);
 const MIN_SIZE: (f32, f32) = (640., 320.);
 const SIDEBAR_WIDTH: f32 = 220.;
 const THEME_LIST_WIDTH: f32 = 220.;
@@ -130,6 +131,9 @@ struct ScannerView {
     theme_search: Option<ThemeSearch>,
     /// Keyboard focus for typing into the theme list.
     theme_focus: FocusHandle,
+    /// The form for a system or channel, while one is being edited.
+    editor: Option<editor::Editor>,
+    editor_focus: FocusHandle,
 }
 
 /// What has been typed into the open theme list, and where in it the
@@ -155,6 +159,8 @@ impl ScannerView {
             themes: Vec::new(),
             theme_search: None,
             theme_focus: cx.focus_handle(),
+            editor: None,
+            editor_focus: cx.focus_handle(),
         };
         match Db::open(&Db::default_path()) {
             Ok(db) => view.db = Some(db),
@@ -399,6 +405,7 @@ impl ScannerView {
                 button("settings", "Settings", show_settings, theme().accent).on_click(cx.listener(
                     move |this, _, _, cx| {
                         this.show_settings = !show_settings;
+                        this.editor = None;
                         this.theme_search = None;
                         this.themes = theme::available();
                         cx.notify();
@@ -449,39 +456,68 @@ impl ScannerView {
                 list = list.child(section_title(title));
             }
             let (id, selected) = (system.id, self.selected.contains(&system.id));
+            let summary = if system.hi_hz > 0.0 {
+                format!(
+                    "{} channels · {:.1}–{:.1} MHz",
+                    system.channels,
+                    system.lo_hz / 1e6,
+                    system.hi_hz / 1e6
+                )
+            } else {
+                "No channels yet".to_string()
+            };
             list = list.child(
                 div()
-                    .id(("system", id as usize))
+                    .flex()
+                    .items_center()
+                    .gap_1()
                     .mx_2()
                     .px_2()
                     .py_1()
                     .rounded_md()
-                    .cursor_pointer()
                     .when(selected, |item| item.bg(rgb(theme().raised)))
-                    .hover(|style| style.bg(rgb(theme().raised)))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.toggle_system(id);
-                        cx.notify();
-                    }))
                     .child(
                         div()
-                            .text_sm()
-                            .truncate()
-                            .text_color(rgb(if selected { theme().accent } else { theme().text }))
-                            .child(system.name.clone()),
+                            .id(("system", id as usize))
+                            .flex_1()
+                            .overflow_hidden()
+                            .cursor_pointer()
+                            .hover(|style| style.opacity(0.8))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.toggle_system(id);
+                                cx.notify();
+                            }))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .truncate()
+                                    .text_color(rgb(if selected { theme().accent } else { theme().text }))
+                                    .child(system.name.clone()),
+                            )
+                            .child(div().text_xs().truncate().text_color(rgb(theme().muted)).child(summary)),
                     )
-                    .child(div().text_xs().truncate().text_color(rgb(theme().muted)).child(format!(
-                        "{} channels · {:.1}–{:.1} MHz",
-                        system.channels,
-                        system.lo_hz / 1e6,
-                        system.hi_hz / 1e6
-                    ))),
+                    .child(
+                        button(("edit-system", id as usize), "Edit", false, theme().accent).on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                this.edit_system(Some(id), window);
+                                cx.notify();
+                            },
+                        )),
+                    ),
             );
         }
         list.child(
             div()
+                .flex()
+                .gap_2()
                 .px_4()
                 .py_3()
+                .child(
+                    button("new-system", "New…", false, theme().accent).on_click(cx.listener(|this, _, window, cx| {
+                        this.edit_system(None, window);
+                        cx.notify();
+                    })),
+                )
                 .child(
                     button("import", "Import…", false, theme().accent).on_click(cx.listener(|_, _, _, cx| {
                         let picked = cx.prompt_for_paths(PathPromptOptions {
@@ -706,6 +742,16 @@ impl ScannerView {
                     cx.notify();
                 })),
             )
+            // The catch-all entry isn't a channel in the database.
+            .child(match e.channel_id {
+                Some(channel) => button(("edit", c), "Edit", false, theme().accent).on_click(cx.listener(
+                    move |this, _, window, cx| {
+                        this.edit_channel(0, Some(channel), window);
+                        cx.notify();
+                    },
+                )),
+                None => div().id(("no-edit", c)).flex_none().w(px(38.)),
+            })
     }
 
     fn activity(&self, session: &Session, live: &Live, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1103,6 +1149,7 @@ impl Render for ScannerView {
         let roomy = width >= px(DETAIL_MIN_WIDTH);
         let main = div().flex_1().h_full().flex().flex_col().overflow_hidden();
         let main = match &self.session {
+            _ if self.editor.is_some() => main.child(self.editor_page(self.editor.as_ref().unwrap(), cx)),
             _ if self.show_settings => main.child(self.settings_page(cx)),
             None => {
                 let message = match (&self.error, self.systems.is_empty()) {
