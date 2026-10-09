@@ -171,7 +171,7 @@ impl ScannerApp {
         self.status = match usb::open() {
             Opened::Fd(fd) => {
                 let source = Config {
-                    source: Source::AirspyFd(fd),
+                    source: Source::airspy_fd(fd),
                     ..Config::default()
                 };
                 match engine::sample_rates(&source) {
@@ -205,7 +205,7 @@ impl ScannerApp {
         match db.plan(&self.selected) {
             Ok(plan) => {
                 let config = Config {
-                    source: Source::AirspyFd(fd),
+                    source: Source::airspy_fd(fd),
                     rate: self.rate(),
                     gain: self.gain,
                     scan: self.scan,

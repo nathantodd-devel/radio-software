@@ -1,0 +1,6 @@
+[package]
+name = "receiver"
+version = "0.2.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+description = "The interface a radio receiver's driver implements to be usable by the scanner"

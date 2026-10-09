@@ -25,6 +25,7 @@ It ships with channel lists for San Mateo County, California, and can import any
 - [Android](#android)
 - [Project layout](#project-layout)
 - [How it works](#how-it-works)
+- [Adding a receiver driver](#adding-a-receiver-driver)
 - [Legal](#legal)
 - [License](#license)
 
@@ -344,8 +345,9 @@ upstream libairspy 1.0.12.
 | `crates/radiocore` | DSP: wideband channelizer, FM demodulator with tone squelch, P25 Phase 1 decoder |
 | `crates/scanner` | The engine (receive loop, scheduling, recording), channel database, importers, and the `scanner` CLI |
 | `crates/scanner-ui` | The desktop app, built with [GPUI](https://www.gpui.rs) |
-| `crates/drivers/airspy` | Airspy access through `libairspy`: the system's, loaded at run time, or a compiled-in copy on Android |
-| `crates/drivers/rtlsdr` | RTL-SDR access through the system's `librtlsdr`, loaded at run time |
+| `crates/drivers/receiver` | The `Driver` and `Receiver` traits every radio driver implements |
+| `crates/drivers/airspy` | Airspy driver, through `libairspy`: the system's, loaded at run time, or a compiled-in copy on Android |
+| `crates/drivers/rtlsdr` | RTL-SDR driver, through the system's `librtlsdr`, loaded at run time |
 | `crates/drivers/audio` | Audio output: `aplay` on Linux, the native audio API elsewhere |
 | `mobile` | The Android app (separate cargo project) |
 | `.github/workflows` | CI, Android CI and the release build |
@@ -367,6 +369,31 @@ upstream libairspy 1.0.12.
 
 When the selected systems span more than one band, the same loop retunes between bands,
 staying on one while it has traffic.
+
+## Adding a receiver driver
+
+The scanner only talks to radios through two traits in
+[`crates/drivers/receiver`](crates/drivers/receiver/src/lib.rs), so supporting another kind of
+radio means implementing them:
+
+- **`Receiver`**, for one open device: its name, the sample rates it offers, how much of the
+  sample rate is usable, `configure` (sample rate, gain on a 0-21 scale, frequency correction,
+  bias tee), `set_frequency`, and `start`, which returns a channel of blocks of interleaved
+  16-bit I/Q.
+- **`Driver`**, for the kind of device: an id (`"airspy"`), a display name, and `open`, which
+  finds a device and returns it as a `Box<dyn Receiver>`.
+
+Then add the driver to `drivers()` in
+[`crates/scanner/src/engine.rs`](crates/scanner/src/engine.rs). It becomes a choice for
+`--device` and in the app's Receiver setting, and is tried by automatic detection, with no
+other changes. A program using the `scanner` crate as a library can also pass any driver
+directly with `Source::Driver(...)` without registering it; the engine's own test does this
+with a driver that plays back a synthetic signal.
+
+The scanner needs sample rates that are whole multiples of 1000, and expects a driver to drop
+samples (and count them) rather than stall if it falls behind. The
+[Airspy](crates/drivers/airspy/src/lib.rs) and [RTL-SDR](crates/drivers/rtlsdr/src/lib.rs)
+drivers are the examples to follow.
 
 ## Legal
 

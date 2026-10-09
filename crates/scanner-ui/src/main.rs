@@ -46,7 +46,7 @@ const RESIZE_CORNER: f32 = 14.;
 struct Settings {
     volume: f32,
     squelch_db: f32,
-    /// Which kind of receiver to use; one of `DEVICES`' names.
+    /// Which kind of receiver to use: a driver's id, or "auto".
     device: String,
     /// Receiver gain, 0-21.
     gain: u8,
@@ -93,16 +93,15 @@ const SCAN_MODES: [(ScanMode, &str, &str, &str); 3] = [
     ),
 ];
 
-/// The kinds of receiver: what each is saved as and called.
-const DEVICES: [(&str, &str); 3] = [("auto", "Automatic"), ("airspy", "Airspy"), ("rtlsdr", "RTL-SDR")];
+/// The receiver setting that means "whichever is found first".
+const AUTO_DEVICE: &str = "auto";
 
 impl Settings {
     /// The receiver to look for.
     fn source(&self) -> Source {
         match self.device.as_str() {
-            "airspy" => Source::Airspy,
-            "rtlsdr" => Source::RtlSdr,
-            _ => Source::Auto,
+            AUTO_DEVICE => Source::Auto,
+            id => Source::Kind(id.to_string()),
         }
     }
 
@@ -116,7 +115,7 @@ impl Settings {
         Self {
             volume: get(db, "volume", 3.0),
             squelch_db: get(db, "squelch_db", 6.0),
-            device: get(db, "device", DEVICES[0].0.to_string()),
+            device: get(db, "device", AUTO_DEVICE.to_string()),
             gain: get(db, "gain", defaults.gain),
             ppm: get(db, "ppm", 0),
             bias_tee: get(db, "bias_tee", false),
@@ -1318,19 +1317,24 @@ impl ScannerView {
                     .flex()
                     .flex_none()
                     .gap_1()
-                    .children(DEVICES.iter().map(|&(saved_as, title)| {
-                        button(saved_as, title, saved_as == device, theme().accent).on_click(cx.listener(
-                            move |this, _, _, cx| {
-                                this.update_settings(false, |s| s.device = saved_as.to_string());
-                                this.error = None;
-                                this.find_receiver();
-                                if this.radio.is_some() {
-                                    this.start();
-                                }
-                                cx.notify();
-                            },
-                        ))
-                    }))
+                    // Automatic, then every kind of receiver there is a driver for.
+                    .children(
+                        std::iter::once((AUTO_DEVICE, "Automatic"))
+                            .chain(engine::drivers().iter().map(|d| (d.id(), d.name())))
+                            .map(|(saved_as, title)| {
+                                button(saved_as, title, saved_as == device, theme().accent).on_click(cx.listener(
+                                    move |this, _, _, cx| {
+                                        this.update_settings(false, |s| s.device = saved_as.to_string());
+                                        this.error = None;
+                                        this.find_receiver();
+                                        if this.radio.is_some() {
+                                            this.start();
+                                        }
+                                        cx.notify();
+                                    },
+                                ))
+                            }),
+                    )
                     .into_any_element(),
             ))
             .child(row(

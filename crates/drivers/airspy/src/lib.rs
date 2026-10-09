@@ -58,13 +58,10 @@ impl std::error::Error for Error {}
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// One delivery of samples from a running receiver.
-pub struct Block {
-    /// Interleaved I and Q, 16 bits each.
-    pub iq: Vec<i16>,
-    /// Samples lost since the previous block because the reader fell behind.
-    pub dropped: u64,
-}
+pub use receiver::Block;
+
+/// Fraction of the sample rate the Airspy's filters pass cleanly.
+const USABLE_BANDWIDTH: f64 = 0.9;
 
 /// State shared with libairspy's streaming thread.
 struct Stream {
@@ -229,4 +226,87 @@ extern "C" fn on_block(transfer: *mut Transfer) -> c_int {
         Err(TrySendError::Disconnected(_)) => return 1,
     }
     0
+}
+
+impl From<Error> for receiver::Error {
+    fn from(error: Error) -> Self {
+        let message = error.to_string();
+        match error {
+            Error::Library(_) => receiver::Error::Unavailable(message),
+            Error::NotFound => receiver::Error::NotFound(message),
+            Error::Busy | Error::Device(_) => receiver::Error::Failed(message),
+        }
+    }
+}
+
+impl receiver::Receiver for Airspy {
+    fn name(&self) -> String {
+        "Airspy".into()
+    }
+
+    fn sample_rates(&self) -> receiver::Result<Vec<u32>> {
+        Ok(Airspy::sample_rates(self)?)
+    }
+
+    fn usable_bandwidth(&self) -> f64 {
+        USABLE_BANDWIDTH
+    }
+
+    fn configure(&mut self, settings: &receiver::Settings) -> receiver::Result<()> {
+        self.set_sample_rate(settings.sample_rate)?;
+        // The scale is the Airspy's own linearity gain.
+        self.set_linearity_gain(settings.gain)?;
+        // Left alone when off, so a failure to switch it can't get in the way.
+        if settings.bias_tee {
+            self.set_bias_tee(true)?;
+        }
+        Ok(())
+    }
+
+    fn set_frequency(&mut self, hz: u32) -> receiver::Result<()> {
+        Ok(Airspy::set_frequency(self, hz)?)
+    }
+
+    fn start(&mut self) -> receiver::Result<Receiver<Block>> {
+        Ok(Airspy::start(self)?)
+    }
+
+    fn stop(&mut self) -> receiver::Result<()> {
+        Ok(Airspy::stop(self)?)
+    }
+}
+
+/// Finds and opens the first Airspy attached.
+pub struct Driver;
+
+impl receiver::Driver for Driver {
+    fn id(&self) -> &'static str {
+        "airspy"
+    }
+
+    fn name(&self) -> &'static str {
+        "Airspy"
+    }
+
+    fn open(&self) -> receiver::Result<Box<dyn receiver::Receiver>> {
+        Ok(Box::new(Airspy::open()?))
+    }
+}
+
+/// Opens an Airspy the operating system has already opened, by the file
+/// descriptor of that connection: see [`Airspy::open_fd`].
+pub struct FdDriver(pub i32);
+
+impl receiver::Driver for FdDriver {
+    fn id(&self) -> &'static str {
+        "airspy"
+    }
+
+    fn name(&self) -> &'static str {
+        "Airspy"
+    }
+
+    fn open(&self) -> receiver::Result<Box<dyn receiver::Receiver>> {
+        Ok(Box::new(Airspy::open_fd(self.0)?))
+    }
 }

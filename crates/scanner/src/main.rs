@@ -35,7 +35,7 @@ as RR_USERNAME, RR_PASSWORD and RR_APP_KEY. The IDs are the numbers in the
 page addresses: radioreference.com/db/sid/ID and .../db/browse/ctid/ID.
 
       --device KIND  auto (an Airspy if there is one, otherwise an RTL-SDR; the
-                     default), airspy or rtlsdr
+                     default), or one kind of receiver: airspy or rtlsdr
   -g, --gain N       receiver gain 0-21 (default 17): the Airspy's linearity
                      gain, or that far up an RTL-SDR tuner's range
       --ppm N        frequency correction for an RTL-SDR's crystal, in parts
@@ -97,11 +97,12 @@ fn parse_args() -> Options {
         }
         match a.as_str() {
             "--device" => {
-                o.config.source = match value().as_str() {
+                let kind = value();
+                let known: Vec<&str> = engine::drivers().iter().map(|d| d.id()).collect();
+                o.config.source = match kind.as_str() {
                     "auto" => Source::Auto,
-                    "airspy" => Source::Airspy,
-                    "rtlsdr" | "rtl-sdr" | "rtl" => Source::RtlSdr,
-                    other => die(format!("--device takes auto, airspy or rtlsdr, not {other:?}")),
+                    id if known.contains(&id) => Source::Kind(kind),
+                    _ => die(format!("--device takes auto, {}, not {kind:?}", known.join(" or "))),
                 }
             }
             "-g" | "--gain" => o.config.gain = num(&a, value()),

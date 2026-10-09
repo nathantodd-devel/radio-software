@@ -59,13 +59,11 @@ impl std::error::Error for Error {}
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// One delivery of samples from a running receiver.
-pub struct Block {
-    /// Interleaved I and Q, scaled from the device's 8 bits to 16.
-    pub iq: Vec<i16>,
-    /// Samples lost since the previous block because the reader fell behind.
-    pub dropped: u64,
-}
+pub use receiver::Block;
+
+/// Fraction of the sample rate the filters pass cleanly; an RTL-SDR's roll
+/// off some way short of the edges.
+const USABLE_BANDWIDTH: f64 = 0.8;
 
 /// The device handle, shared with the thread that reads from it.
 struct Handle {
@@ -312,6 +310,72 @@ extern "C" fn on_read(buf: *mut u8, len: u32, ctx: *mut c_void) {
             // SAFETY: `device` is open for as long as `handle` is held.
             unsafe { (stream.handle.lib.cancel_async)(stream.handle.device) };
         }
+    }
+}
+
+impl From<Error> for receiver::Error {
+    fn from(error: Error) -> Self {
+        let message = error.to_string();
+        match error {
+            Error::Library(_) => receiver::Error::Unavailable(message),
+            Error::NotFound => receiver::Error::NotFound(message),
+            Error::Device(_) => receiver::Error::Failed(message),
+        }
+    }
+}
+
+impl receiver::Receiver for RtlSdr {
+    fn name(&self) -> String {
+        RtlSdr::name(self).to_string()
+    }
+
+    fn sample_rates(&self) -> receiver::Result<Vec<u32>> {
+        Ok(RtlSdr::sample_rates(self))
+    }
+
+    fn usable_bandwidth(&self) -> f64 {
+        USABLE_BANDWIDTH
+    }
+
+    fn configure(&mut self, settings: &receiver::Settings) -> receiver::Result<()> {
+        self.set_sample_rate(settings.sample_rate)?;
+        self.set_frequency_correction(settings.ppm)?;
+        self.set_gain_level(settings.gain, receiver::GAIN_LEVELS)?;
+        // Left alone when off: older libraries can't switch it at all.
+        if settings.bias_tee {
+            self.set_bias_tee(true)?;
+        }
+        Ok(())
+    }
+
+    fn set_frequency(&mut self, hz: u32) -> receiver::Result<()> {
+        Ok(RtlSdr::set_frequency(self, hz)?)
+    }
+
+    fn start(&mut self) -> receiver::Result<Receiver<Block>> {
+        Ok(RtlSdr::start(self)?)
+    }
+
+    fn stop(&mut self) -> receiver::Result<()> {
+        RtlSdr::stop(self);
+        Ok(())
+    }
+}
+
+/// Finds and opens the first RTL-SDR attached.
+pub struct Driver;
+
+impl receiver::Driver for Driver {
+    fn id(&self) -> &'static str {
+        "rtlsdr"
+    }
+
+    fn name(&self) -> &'static str {
+        "RTL-SDR"
+    }
+
+    fn open(&self) -> receiver::Result<Box<dyn receiver::Receiver>> {
+        Ok(Box::new(RtlSdr::open()?))
     }
 }
 

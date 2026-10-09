@@ -7,3 +7,4 @@ description = "Safe interface to RTL-SDR receivers (RTL2832U with R820T2/R860 an
 
 [dependencies]
 libloading = "0.8"
+receiver = { path = "../receiver", version = "0.2.0" }

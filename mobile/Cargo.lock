@@ -33,6 +33,7 @@ dependencies = [
  "cc",
  "libloading",
  "libusb1-sys",
+ "receiver",
 ]
 
 [[package]]
@@ -4014,6 +4015,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03251193000f4bd3b042892be858ee50e8b3719f2b08e5833ac4353724632430"
 
 [[package]]
+name = "receiver"
+version = "0.2.0"
+
+[[package]]
 name = "redox_syscall"
 version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4174,6 +4179,7 @@ name = "rtlsdr"
 version = "0.2.0"
 dependencies = [
  "libloading",
+ "receiver",
 ]
 
 [[package]]
@@ -4377,6 +4383,7 @@ dependencies = [
  "chrono",
  "ctrlc",
  "radiocore",
+ "receiver",
  "roxmltree 0.21.1",
  "rtlsdr",
  "rusqlite",
