@@ -167,6 +167,8 @@ impl Client {
             (held.name.clone(), format!("Holding on {}", held.label), HOLD)
         } else {
             let detail = match status.band {
+                // Several receivers at once: where each one is.
+                _ if status.receivers.is_some() => status.receivers.clone().unwrap_or_default(),
                 Some(band) if band.lo_hz == band.hi_hz => {
                     format!(
                         "Frequency {} of {} · {:.4} MHz",

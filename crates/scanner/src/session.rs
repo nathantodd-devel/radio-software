@@ -31,6 +31,13 @@ pub struct Call {
     pub played: bool,
 }
 
+/// A receiver being scanned with, and where it is tuned.
+pub struct TunedReceiver {
+    pub name: String,
+    /// (which of its bands, of how many, from Hz, to Hz), once it has tuned.
+    pub band: Option<(usize, usize, f64, f64)>,
+}
+
 #[derive(Default)]
 pub struct Live {
     /// Carrier level over the noise floor per channel, in dB.
@@ -39,8 +46,11 @@ pub struct Live {
     pub calls: Vec<u32>,
     pub last_heard: Vec<Option<String>>,
     pub playing: Option<usize>,
-    /// When taking turns between bands: (which, of how many, from Hz, to Hz).
+    /// With one receiver taking turns between bands: (which, of how many,
+    /// from Hz, to Hz).
     pub band: Option<(usize, usize, f64, f64)>,
+    /// The receivers being scanned with.
+    pub receivers: Vec<TunedReceiver>,
     /// Newest first.
     pub log: VecDeque<Call>,
     /// How many calls there have been.
@@ -54,6 +64,33 @@ pub struct Session {
     pub controls: Arc<Controls>,
     pub live: Arc<Mutex<Live>>,
     thread: Option<JoinHandle<()>>,
+}
+
+impl Live {
+    /// With more than one receiver, where each is tuned, for showing:
+    /// "Airspy 482.5–490.9 MHz  ·  RTL-SDR band 2 of 3, 153.8–155.9 MHz".
+    pub fn tunings(&self) -> Option<String> {
+        if self.receivers.len() < 2 {
+            return None;
+        }
+        let tuning = |receiver: &TunedReceiver| {
+            let band = match receiver.band {
+                None => "starting".to_string(),
+                // One channel at a time: each "band" is a single frequency.
+                Some((index, count, lo, hi)) if lo == hi && count > 1 => {
+                    format!("frequency {} of {count}, {:.4} MHz", index + 1, lo / 1e6)
+                }
+                Some((_, _, lo, hi)) if lo == hi => format!("{:.4} MHz", lo / 1e6),
+                Some((index, count, lo, hi)) if count > 1 => {
+                    format!("band {} of {count}, {:.1}–{:.1} MHz", index + 1, lo / 1e6, hi / 1e6)
+                }
+                Some((_, _, lo, hi)) => format!("{:.1}–{:.1} MHz", lo / 1e6, hi / 1e6),
+            };
+            format!("{} {band}", receiver.name)
+        };
+        let tunings: Vec<String> = self.receivers.iter().map(tuning).collect();
+        Some(tunings.join("  ·  "))
+    }
 }
 
 impl Session {
@@ -104,12 +141,27 @@ impl Session {
                                 call.played = true;
                             }
                         }
+                        Event::Receivers(names) => {
+                            let receiver = |name: &String| TunedReceiver {
+                                name: name.clone(),
+                                band: None,
+                            };
+                            live.receivers = names.iter().map(receiver).collect();
+                        }
                         Event::Band {
+                            receiver,
                             index,
                             count,
                             lo_hz,
                             hi_hz,
-                        } => live.band = (count > 1).then_some((index, count, lo_hz, hi_hz)),
+                        } => {
+                            if let Some(receiver) = live.receivers.get_mut(receiver) {
+                                receiver.band = Some((index, count, lo_hz, hi_hz));
+                            }
+                            if live.receivers.len() < 2 {
+                                live.band = (count > 1).then_some((index, count, lo_hz, hi_hz));
+                            }
+                        }
                         Event::Opened {
                             channel,
                             snr_db,

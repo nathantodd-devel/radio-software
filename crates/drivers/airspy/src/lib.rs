@@ -114,6 +114,43 @@ impl Airspy {
         })
     }
 
+    /// Open every Airspy that is attached and not in use.
+    pub fn open_all() -> Result<Vec<Self>> {
+        /// More Airspys than anyone will attach.
+        const MOST: usize = 16;
+        let lib = Lib::load().map_err(Error::Library)?;
+        let mut serials = [0u64; MOST];
+        // SAFETY: `serials` has room for the count passed.
+        let listed = lib
+            .list_devices
+            .map(|list| unsafe { list(serials.as_mut_ptr(), MOST as c_int) });
+        let (Some(count @ 2..), Some(open_sn)) = (listed, lib.open_sn) else {
+            // One, none, or a library too old to say: the ordinary way,
+            // which also gives the right error.
+            return Ok(vec![Self::open()?]);
+        };
+        let mut found = Vec::new();
+        for &serial in &serials[..(count as usize).min(MOST)] {
+            let lib = Lib::load().map_err(Error::Library)?;
+            let mut device = std::ptr::null_mut();
+            // SAFETY: `device` is a valid place for the handle to be written.
+            let code = unsafe { open_sn(&mut device, serial) };
+            // One that won't open is in use elsewhere: left alone.
+            if check(&lib, code).is_ok() {
+                found.push(Self {
+                    lib,
+                    device,
+                    stream: None,
+                });
+            }
+        }
+        if found.is_empty() {
+            Err(Error::NotFound)
+        } else {
+            Ok(found)
+        }
+    }
+
     fn call(&self, code: c_int) -> Result<()> {
         check(&self.lib, code)
     }
@@ -290,6 +327,11 @@ impl receiver::Driver for Driver {
 
     fn open(&self) -> receiver::Result<Box<dyn receiver::Receiver>> {
         Ok(Box::new(Airspy::open()?))
+    }
+
+    fn open_all(&self) -> receiver::Result<Vec<Box<dyn receiver::Receiver>>> {
+        let devices = Airspy::open_all()?;
+        Ok(devices.into_iter().map(|device| Box::new(device) as _).collect())
     }
 }
 

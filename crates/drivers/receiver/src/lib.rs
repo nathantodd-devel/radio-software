@@ -111,4 +111,11 @@ pub trait Driver: Send + Sync {
 
     /// Find a device of this kind and open it.
     fn open(&self) -> Result<Box<dyn Receiver>>;
+
+    /// Open every device of this kind that is attached and free, for
+    /// scanning with several at once; an error if there are none. Unless a
+    /// driver says otherwise, that is the one [`open`](Self::open) finds.
+    fn open_all(&self) -> Result<Vec<Box<dyn Receiver>>> {
+        Ok(vec![self.open()?])
+    }
 }

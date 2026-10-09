@@ -124,6 +124,9 @@ pub struct Status {
     /// The channel being held on.
     pub held: Option<usize>,
     pub band: Option<Band>,
+    /// With more than one receiver, where each is tuned, as text to show.
+    #[serde(default)]
+    pub receivers: Option<String>,
     pub replaying: bool,
     /// Recent calls, newest first.
     pub log: Vec<Call>,

@@ -159,43 +159,71 @@ impl Plan {
     /// Split the plan into as few tunings as cover every frequency, each no
     /// wider than `max_span_hz`, lowest first.
     pub fn bands(&self, max_span_hz: f64) -> Vec<Band> {
-        let mut listeners: Vec<(f64, Listener)> = self.listeners().collect();
-        listeners.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let mut bands: Vec<Band> = Vec::new();
-        for (freq_hz, listener) in listeners {
-            match bands.last_mut() {
-                Some(band) if freq_hz - band.lo_hz <= max_span_hz => {
-                    band.hi_hz = freq_hz;
-                    band.listeners.push((freq_hz, listener));
-                }
-                _ => bands.push(Band {
-                    lo_hz: freq_hz,
-                    hi_hz: freq_hz,
-                    center_hz: 0.0,
-                    listeners: vec![(freq_hz, listener)],
-                }),
-            }
-        }
-        for band in &mut bands {
-            // Channels sit on a raster of their own; tune on the bin grid or
-            // half a bin off it, whichever lands channels closer to bin centres.
-            let on_grid = ((band.lo_hz + band.hi_hz) / 2.0 / BIN_HZ).round() * BIN_HZ;
-            let worst = |center: f64| {
-                let off = |f: f64| ((f - center) / BIN_HZ).fract().abs();
-                band.listeners
-                    .iter()
-                    .map(|(f, _)| off(*f).min(1.0 - off(*f)))
-                    .fold(0.0, f64::max)
-            };
-            let off_grid = on_grid + BIN_HZ / 2.0;
-            band.center_hz = if worst(off_grid) < worst(on_grid) {
-                off_grid
-            } else {
-                on_grid
-            };
-        }
-        bands
+        group(self.listeners().collect(), max_span_hz)
     }
+
+    /// Share the plan between receivers that scan at the same time, each
+    /// with the widest tuning it can cover (`max_spans_hz`, widest first).
+    /// Every receiver gets the tunings it takes turns on, lowest first: an
+    /// equal number as near as can be, the widest going to the receivers
+    /// that cover the most. A receiver there is nothing left for gets none.
+    pub fn share(&self, max_spans_hz: &[f64]) -> Vec<Vec<Band>> {
+        let mut left: Vec<(f64, Listener)> = self.listeners().collect();
+        let mut shares = Vec::new();
+        for (i, &max_span_hz) in max_spans_hz.iter().enumerate() {
+            let mut bands = group(std::mem::take(&mut left), max_span_hz);
+            // Its share of what is left, counted in its own tunings.
+            let take = bands.len().div_ceil(max_spans_hz.len() - i);
+            // Widest first; `sort_by` keeps the lowest first among equals.
+            bands.sort_by(|a, b| (b.hi_hz - b.lo_hz).total_cmp(&(a.hi_hz - a.lo_hz)));
+            for band in bands.split_off(take) {
+                left.extend(band.listeners);
+            }
+            bands.sort_by(|a, b| a.lo_hz.total_cmp(&b.lo_hz));
+            shares.push(bands);
+        }
+        shares
+    }
+}
+
+/// Group listeners into as few tunings as cover them all, each no wider than
+/// `max_span_hz`, lowest first.
+fn group(mut listeners: Vec<(f64, Listener)>, max_span_hz: f64) -> Vec<Band> {
+    listeners.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut bands: Vec<Band> = Vec::new();
+    for (freq_hz, listener) in listeners {
+        match bands.last_mut() {
+            Some(band) if freq_hz - band.lo_hz <= max_span_hz => {
+                band.hi_hz = freq_hz;
+                band.listeners.push((freq_hz, listener));
+            }
+            _ => bands.push(Band {
+                lo_hz: freq_hz,
+                hi_hz: freq_hz,
+                center_hz: 0.0,
+                listeners: vec![(freq_hz, listener)],
+            }),
+        }
+    }
+    for band in &mut bands {
+        // Channels sit on a raster of their own; tune on the bin grid or
+        // half a bin off it, whichever lands channels closer to bin centres.
+        let on_grid = ((band.lo_hz + band.hi_hz) / 2.0 / BIN_HZ).round() * BIN_HZ;
+        let worst = |center: f64| {
+            let off = |f: f64| ((f - center) / BIN_HZ).fract().abs();
+            band.listeners
+                .iter()
+                .map(|(f, _)| off(*f).min(1.0 - off(*f)))
+                .fold(0.0, f64::max)
+        };
+        let off_grid = on_grid + BIN_HZ / 2.0;
+        band.center_hz = if worst(off_grid) < worst(on_grid) {
+            off_grid
+        } else {
+            on_grid
+        };
+    }
+    bands
 }
 
 /// What a receiver on one frequency is listening for.
@@ -516,6 +544,21 @@ mod tests {
         // P25 frequencies sit half a bin off the grid; the tuning follows.
         assert_eq!(bands[3].center_hz, 772_756_750.0);
         assert_eq!(plan.bands(400e6).len(), 2);
+
+        // Shared between receivers, each gets as near an equal number of
+        // tunings as can be, the widest going to those that cover the most.
+        let lows = |shares: Vec<Vec<Band>>| -> Vec<Vec<f64>> {
+            let lows = |share: &Vec<Band>| share.iter().map(|band| band.lo_hz / 1e6).collect();
+            shares.iter().map(lows).collect()
+        };
+        assert_eq!(lows(plan.share(&[9e6])), [[154.1, 453.1, 482.5, 772.03125]]);
+        assert_eq!(
+            lows(plan.share(&[9e6, 2e6])),
+            [vec![482.5, 772.03125], vec![154.1, 453.1]]
+        );
+        assert_eq!(lows(plan.share(&[9e6; 4])), [[482.5], [772.03125], [154.1], [453.1]]);
+        // More receivers than there is to cover: the rest get nothing.
+        assert_eq!(lows(plan.share(&[9e6; 5]))[4], [0.0; 0]);
 
         // A span of nothing is one channel at a time: only channels on the
         // very same frequency share a tuning.

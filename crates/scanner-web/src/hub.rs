@@ -288,6 +288,7 @@ impl Hub {
                 .collect(),
             playing: live.playing,
             held: controls.pinned(),
+            receivers: live.tunings(),
             band: live.band.map(|(index, count, lo_hz, hi_hz)| Band {
                 index,
                 count,

@@ -601,6 +601,14 @@ impl ScannerView {
             (None, None, None) => {
                 let (lo, hi, _) = session.plan.span();
                 let detail = match live.band {
+                    // Several receivers at once: where each one is.
+                    _ if live.tunings().is_some() => {
+                        format!(
+                            "{} channels  ·  {}",
+                            session.plan.entries.len(),
+                            live.tunings().unwrap_or_default()
+                        )
+                    }
                     // One channel at a time: each "band" is a single frequency.
                     Some((index, count, lo, hi)) if lo == hi => format!(
                         "{} channels  ·  frequency {} of {}, {:.4} MHz",

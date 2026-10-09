@@ -6,7 +6,7 @@ use std::str::FromStr;
 use crate::db::Db;
 use crate::engine::{Config, ScanMode, Source};
 
-/// The receiver setting that means "whichever is found first".
+/// The receiver setting that means "every one attached".
 pub const AUTO_DEVICE: &str = "auto";
 
 pub struct Settings {

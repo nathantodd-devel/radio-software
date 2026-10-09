@@ -1,2 +1,6 @@
 /target
 gpui-mobile
+*.cert
+*.crt
+*.key
+*.pem

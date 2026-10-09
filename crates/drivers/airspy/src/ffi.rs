@@ -30,6 +30,11 @@ pub struct Lib {
     /// Opens a device the operating system has already opened for us, by its
     /// file descriptor. Only in libairspy 1.0.12 and later.
     pub open_fd: Option<unsafe extern "C" fn(*mut Device, c_int) -> c_int>,
+    /// Writes the serial numbers of the devices attached, up to a count,
+    /// and returns how many there are. Not in the oldest libraries.
+    pub list_devices: Option<unsafe extern "C" fn(*mut u64, c_int) -> c_int>,
+    /// Opens the device with a serial number. Not in the oldest libraries.
+    pub open_sn: Option<unsafe extern "C" fn(*mut Device, u64) -> c_int>,
     pub close: unsafe extern "C" fn(Device) -> c_int,
     pub get_samplerates: unsafe extern "C" fn(Device, *mut u32, u32) -> c_int,
     pub set_samplerate: unsafe extern "C" fn(Device, u32) -> c_int,
@@ -58,6 +63,8 @@ mod linked {
     unsafe extern "C" {
         pub fn airspy_open(device: *mut Device) -> c_int;
         pub fn airspy_open_fd(device: *mut Device, fd: c_int) -> c_int;
+        pub fn airspy_list_devices(serials: *mut u64, count: c_int) -> c_int;
+        pub fn airspy_open_sn(device: *mut Device, serial_number: u64) -> c_int;
         pub fn airspy_close(device: Device) -> c_int;
         pub fn airspy_get_samplerates(device: Device, buffer: *mut u32, len: u32) -> c_int;
         pub fn airspy_set_samplerate(device: Device, samplerate: u32) -> c_int;
@@ -79,6 +86,8 @@ impl Lib {
         Ok(Self {
             open: airspy_open,
             open_fd: Some(airspy_open_fd),
+            list_devices: Some(airspy_list_devices),
+            open_sn: Some(airspy_open_sn),
             close: airspy_close,
             get_samplerates: airspy_get_samplerates,
             set_samplerate: airspy_set_samplerate,
@@ -131,9 +140,15 @@ impl Lib {
         }
         // SAFETY: as above; absent from older libraries, which is fine.
         let open_fd = unsafe { library.get(b"airspy_open_fd\0") }.ok().map(|f| *f);
+        // SAFETY: likewise.
+        let list_devices = unsafe { library.get(b"airspy_list_devices\0") }.ok().map(|f| *f);
+        // SAFETY: likewise.
+        let open_sn = unsafe { library.get(b"airspy_open_sn\0") }.ok().map(|f| *f);
         Ok(Self {
             open: symbol!("open"),
             open_fd,
+            list_devices,
+            open_sn,
             close: symbol!("close"),
             get_samplerates: symbol!("get_samplerates"),
             set_samplerate: symbol!("set_samplerate"),

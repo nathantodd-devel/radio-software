@@ -281,6 +281,8 @@ impl ScannerApp {
                 }
                 (None, None) => {
                     let detail = match live.band {
+                        // Several receivers at once: where each one is.
+                        _ if live.tunings().is_some() => live.tunings().unwrap_or_default(),
                         Some((index, count, lo, hi)) if lo == hi => {
                             format!("Frequency {} of {} · {:.4} MHz", index + 1, count, lo / 1e6)
                         }

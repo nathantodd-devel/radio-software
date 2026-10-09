@@ -115,18 +115,37 @@ pub fn device_count() -> Result<u32> {
 impl RtlSdr {
     /// Open the first RTL-SDR found.
     pub fn open() -> Result<Self> {
+        Self::open_nth(0)
+    }
+
+    /// Open every RTL-SDR that is attached and not in use.
+    pub fn open_all() -> Result<Vec<Self>> {
+        let mut failure = Error::NotFound;
+        let mut found = Vec::new();
+        for index in 0..device_count()? {
+            match Self::open_nth(index) {
+                Ok(device) => found.push(device),
+                // One that won't open is in use elsewhere: left alone.
+                Err(e) => failure = e,
+            }
+        }
+        if found.is_empty() { Err(failure) } else { Ok(found) }
+    }
+
+    /// Open the RTL-SDR at `index` in the order the library lists them.
+    fn open_nth(index: u32) -> Result<Self> {
         let lib = Lib::load().map_err(Error::Library)?;
         // SAFETY: takes no arguments.
-        if unsafe { (lib.get_device_count)() } == 0 {
+        if unsafe { (lib.get_device_count)() } <= index {
             return Err(Error::NotFound);
         }
-        // SAFETY: device 0 exists; the name is a static string.
-        let name = unsafe { CStr::from_ptr((lib.get_device_name)(0)) }
+        // SAFETY: the device exists; the name is a static string.
+        let name = unsafe { CStr::from_ptr((lib.get_device_name)(index)) }
             .to_string_lossy()
             .into_owned();
         let mut device = std::ptr::null_mut();
         // SAFETY: `device` is a valid place for the handle to be written.
-        let code = unsafe { (lib.open)(&mut device, 0) };
+        let code = unsafe { (lib.open)(&mut device, index) };
         if code < 0 || device.is_null() {
             return Err(Error::Device(format!(
                 "couldn't open {name} (librtlsdr error {code}); it may be in use by another program{}",
@@ -376,6 +395,11 @@ impl receiver::Driver for Driver {
 
     fn open(&self) -> receiver::Result<Box<dyn receiver::Receiver>> {
         Ok(Box::new(RtlSdr::open()?))
+    }
+
+    fn open_all(&self) -> receiver::Result<Vec<Box<dyn receiver::Receiver>>> {
+        let devices = RtlSdr::open_all()?;
+        Ok(devices.into_iter().map(|device| Box::new(device) as _).collect())
     }
 }
 

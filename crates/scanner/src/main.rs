@@ -34,8 +34,8 @@ account and an application key from RadioReference, given in the environment
 as RR_USERNAME, RR_PASSWORD and RR_APP_KEY. The IDs are the numbers in the
 page addresses: radioreference.com/db/sid/ID and .../db/browse/ctid/ID.
 
-      --device KIND  auto (an Airspy if there is one, otherwise an RTL-SDR; the
-                     default), or one kind of receiver: airspy or rtlsdr
+      --device KIND  auto (every receiver attached, sharing the bands between
+                     them; the default), or one kind only: airspy or rtlsdr
   -g, --gain N       receiver gain 0-21 (default 17): the Airspy's linearity
                      gain, or that far up an RTL-SDR tuner's range
       --ppm N        frequency correction for an RTL-SDR's crystal, in parts
@@ -260,6 +260,7 @@ fn scan(o: &Options, plan: Plan) {
         hi / 1e6
     );
     let mut announced = false;
+    let (mut several, mut announced_for) = (false, 0);
     let result = engine::run(&plan, &o.config, &controls, |event| {
         match event {
             Event::Opened {
@@ -281,8 +282,33 @@ fn scan(o: &Options, plan: Plan) {
                     unit.map_or(String::new(), |unit| format!("  unit {unit}"))
                 );
             }
+            Event::Receivers(names) if names.len() > 1 => {
+                several = true;
+                eprintln!("Scanning with {} receivers: {}.", names.len(), names.join(", "));
+            }
+            // With several receivers, what each one covers.
+            Event::Band {
+                receiver,
+                index: 0,
+                count,
+                lo_hz,
+                hi_hz,
+            } if several && announced_for <= receiver => {
+                announced_for = receiver + 1;
+                let turns = if count > 1 {
+                    format!(", the first of {count} it takes turns on")
+                } else {
+                    String::new()
+                };
+                eprintln!(
+                    "  receiver {}: {:.4}–{:.4} MHz{turns}",
+                    receiver + 1,
+                    lo_hz / 1e6,
+                    hi_hz / 1e6
+                );
+            }
             // Announced once, not on every hop.
-            Event::Band { index: 0, count, .. } if count > 1 && !announced => {
+            Event::Band { index: 0, count, .. } if count > 1 && !announced && !several => {
                 announced = true;
                 let what = if o.config.scan == ScanMode::Channels {
                     "channels"

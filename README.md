@@ -41,8 +41,10 @@ It ships with channel lists for San Mateo County, California, and can import any
 - **Three scan modes:** receive one band; hop between bands when the selected systems are too
   far apart; or scan one channel at a time at a low sample rate for less CPU and USB load.
 - **Two kinds of receiver:** Airspy R2 and Mini, and RTL-SDR dongles (RTL2832U with an R820T2
-  or R860 tuner, and the other tuners librtlsdr supports). The scanner uses an Airspy if one is
-  attached, otherwise an RTL-SDR, or whichever you choose.
+  or R860 tuner, and the other tuners librtlsdr supports).
+- **Several receivers at once.** Every receiver attached is used: the bands are shared out
+  between them, so two radios cover two bands with no hopping, or hop half as far each. One
+  call plays at a time, as with a single receiver; the rest are still logged and recorded.
 - **Selectable sample rate** (10 or 2.5 MSPS on an Airspy R2; 2.4, 2.048 or 1.024 MSPS on an
   RTL-SDR).
 - **Per-channel controls:** hold, skip, priority (interrupts other traffic) and record.
@@ -71,6 +73,7 @@ This is a young project. What has and has not been exercised:
 | RadioReference CSV import | Tested only on hand-made samples |
 | Web version (`scanner-web`) | Tested on air with Chrome on Linux, driven by script: live data, controls, replay and audio delivery. Sound has not been listened to by a person; other browsers, phones and touch scrolling are untested |
 | Android app | Builds and draws on a Pixel 10; receiving with an Airspy attached is untested |
+| Several receivers at once | Tested with two and three simulated receivers; never run with two real radios. Both are processed on one CPU core, so two radios at 10 MSPS may be more than a slower computer keeps up with |
 | RTL-SDR | Driver written and the engine tested at its sample rates with synthetic signals; never run with a real dongle |
 | Airspy Mini | Should work (sample rates are read from the device); untested |
 
@@ -160,7 +163,7 @@ Useful options:
 
 | Option | Meaning |
 |---|---|
-| `--device auto\|airspy\|rtlsdr` | Which receiver to use (default `auto`) |
+| `--device auto\|airspy\|rtlsdr` | Which receivers to use: every one attached (`auto`, the default) or every one of a kind |
 | `-g`, `--gain N` | Receiver gain, 0-21 (default 17) |
 | `--ppm N` | Frequency correction for an RTL-SDR, in parts per million |
 | `--bias-tee` | Power an antenna amplifier through the coax |
@@ -468,7 +471,9 @@ radio means implementing them:
   bias tee), `set_frequency`, and `start`, which returns a channel of blocks of interleaved
   16-bit I/Q.
 - **`Driver`**, for the kind of device: an id (`"airspy"`), a display name, and `open`, which
-  finds a device and returns it as a `Box<dyn Receiver>`.
+  finds a device and returns it as a `Box<dyn Receiver>`. To have several devices of the kind
+  scanned together, also implement `open_all`, which returns every one attached; without it
+  the one `open` finds is used.
 
 Then add the driver to `drivers()` in
 [`crates/scanner/src/engine.rs`](crates/scanner/src/engine.rs). It becomes a choice for
