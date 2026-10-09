@@ -204,6 +204,7 @@ scanner-web --help
 | `--local-audio` | Also play through this computer's speakers |
 | `--web-root DIR` | Where the page's files are (default: a `web` folder beside the program) |
 | `--db FILE` | Channel database to use |
+| `--access-code CODE` | Ask for this code before showing or playing anything |
 | `--tls-cert FILE` `--tls-key FILE` | Serve over HTTPS with this certificate and private key (PEM files) |
 
 The page shows the systems in the channel database and lets you choose which to scan; the
@@ -214,8 +215,13 @@ the page has been clicked.
 
 Things to know:
 
-- **There is no login.** Anyone who can open the page can listen and change settings, so use
-  `--listen all` only on a network you trust, and don't expose the port to the internet.
+- **Unless you set an access code, anyone who can open the page can listen and change
+  settings.** With `--access-code CODE` (or the `SCANNER_WEB_ACCESS_CODE` environment variable,
+  which keeps the code out of the list of running programs) the page asks for the code first,
+  and a browser that has given it is remembered. Everyone shares the one code; change it to
+  shut everyone out. Wrong guesses are limited to one every two seconds, so pick a code that
+  isn't short. Without HTTPS the code crosses the network unencrypted, so use it together with
+  `--tls-cert` and `--tls-key` on any network you don't trust.
 - There is one scanner, shared: every browser hears the same audio, and a setting changed in
   one changes for all. Settings and the selection are saved in the channel database, the same
   ones the desktop app uses.

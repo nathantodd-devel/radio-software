@@ -16,14 +16,15 @@ use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use scanner::db::Db;
 
+use http::{Access, Site};
 use hub::{Clients, Hub};
 
 const USAGE: &str = "\
 usage: scanner-web [options]
 
 Scans with the receiver attached to this computer and serves a web page to
-listen and control it from. There is no login: whoever can reach the page
-can listen and change settings.
+listen and control it from. Unless an access code is set, whoever can reach
+the page can listen and change settings.
 
       --listen WHO   who can connect: `local` (this computer only, the
                      default), `all` (anything that can reach this computer
@@ -38,7 +39,12 @@ can listen and change settings.
                      serve over HTTPS with this certificate (PEM, with any
                      intermediate certificates after it) and its private key
                      (PEM). Browsers on other devices need HTTPS to run the
-                     page; give both options or neither";
+                     page; give both options or neither
+      --access-code CODE
+                     ask for this code before showing or playing anything.
+                     Can also be given in the SCANNER_WEB_ACCESS_CODE
+                     environment variable, which keeps it out of the list of
+                     running programs";
 
 const DEFAULT_PORT: u16 = 1515;
 /// How often listeners are told how every channel stands.
@@ -81,6 +87,7 @@ fn main() {
     let (mut address, mut port) = (IpAddr::V4(Ipv4Addr::LOCALHOST), DEFAULT_PORT);
     let (mut web_root, mut db_path, mut local_audio) = (default_web_root(), Db::default_path(), false);
     let (mut tls_cert, mut tls_key) = (None, None);
+    let mut access_code = std::env::var("SCANNER_WEB_ACCESS_CODE").ok();
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         let mut value = || args.next().unwrap_or_else(|| die(format!("{a} needs a value")));
@@ -100,6 +107,7 @@ fn main() {
             "--local-audio" => local_audio = true,
             "--tls-cert" => tls_cert = Some(PathBuf::from(value())),
             "--tls-key" => tls_key = Some(PathBuf::from(value())),
+            "--access-code" => access_code = Some(value()),
             "-h" | "--help" => {
                 println!("{USAGE}");
                 exit(0)
@@ -113,6 +121,16 @@ fn main() {
         (None, None) => None,
         _ => die("--tls-cert and --tls-key go together"),
     };
+    let access_code = access_code.map(|code| code.trim().to_string());
+    if access_code.as_deref() == Some("") {
+        die("the access code can't be empty");
+    }
+    let site = Arc::new(Site {
+        web_root,
+        tls,
+        access: access_code.as_deref().map(Access::new),
+    });
+    let (web_root, tls, locked) = (&site.web_root, &site.tls, site.access.is_some());
     let db = Db::open(&db_path).unwrap_or_else(|e| die(e));
     let listener = TcpListener::bind(SocketAddr::new(address, port))
         .unwrap_or_else(|e| die(format!("can't listen on {address}:{port}: {e}")));
@@ -142,9 +160,19 @@ fn main() {
         } else {
             println!("Serving on {scheme}://{address}:{port}/");
         }
-        println!("There is no login: anyone who can reach it can listen and change settings.");
+        if !locked {
+            println!(
+                "There is no access code (see --access-code): anyone who can reach it can listen and change settings."
+            );
+        }
         if tls.is_none() {
             println!("Browsers on other devices only run the page over HTTPS: see --tls-cert and --tls-key.");
+        }
+    }
+    if locked {
+        println!("An access code is needed to use it.");
+        if tls.is_none() && !address.is_loopback() {
+            println!("Without HTTPS the code crosses the network unencrypted, where others on it could read it.");
         }
     }
     if !web_root.join("index.html").is_file() {
@@ -180,7 +208,7 @@ fn main() {
             break;
         }
         let Ok(stream) = stream else { continue };
-        let (hub, clients, web_root, tls) = (hub.clone(), clients.clone(), web_root.clone(), tls.clone());
-        std::thread::spawn(move || http::serve(stream, tls, &hub, &clients, &web_root));
+        let (hub, clients, site) = (hub.clone(), clients.clone(), site.clone());
+        std::thread::spawn(move || http::serve(stream, &site, &hub, &clients));
     }
 }
