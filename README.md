@@ -220,8 +220,12 @@ Things to know:
   ones the desktop app uses.
 - Only one program can use the receiver at a time, so close the desktop app first.
 - The page is built with GPUI, like the apps, and compiled to WebAssembly. It needs a browser
-  with WebGPU (current Chrome, Edge and Safari; Firefox on some platforms) and downloads about
-  10 MB the first time.
+  with WebGPU (current Chrome, Edge and Safari; in Firefox on Linux, set `dom.webgpu.enabled`
+  in `about:config`) and downloads about 10 MB the first time. Where WebGPU is off, the page
+  says how to turn it on.
+- From another device the page needs HTTPS: over plain HTTP, browsers only allow what it uses
+  on `localhost`. `scanner-web` does not serve HTTPS itself, so put a reverse proxy with a
+  certificate in front of it.
 - Channels are added and edited with the desktop app or the command line, not from the page.
 
 ## The channel database

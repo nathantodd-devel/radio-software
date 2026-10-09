@@ -26,7 +26,123 @@
                 -webkit-user-select: none;
                 user-select: none;
             }
+            #notice {
+                display: none;
+                position: fixed;
+                inset: 0;
+                z-index: 1;
+                overflow: auto;
+                padding: 32px 16px;
+                background: #121318;
+                color: #e6e9ee;
+                font: 16px/1.5 system-ui, sans-serif;
+            }
+            #notice > div {
+                max-width: 560px;
+                margin: 0 auto;
+                padding: 24px;
+                border: 1px solid #313743;
+                border-radius: 8px;
+                background: #1c2027;
+            }
+            #notice h1 {
+                margin-bottom: 12px;
+                font-size: 20px;
+                color: #e0a84c;
+            }
+            #notice p,
+            #notice ol {
+                margin-bottom: 12px;
+            }
+            #notice ol {
+                padding-left: 24px;
+            }
+            #notice code {
+                padding: 1px 5px;
+                border-radius: 4px;
+                background: #2a303a;
+                font-family: ui-monospace, monospace;
+            }
+            #notice .why {
+                margin: 0;
+                color: #8b93a1;
+                font-size: 14px;
+            }
         </style>
     </head>
-    <body></body>
+    <body>
+        <!-- Shown instead of the app when this browser can't run it, saying how to make it able to. -->
+        <div id="notice" role="alert"><div></div></div>
+        <script>
+            // The app draws with WebGPU and needs memory shared between threads.
+            // Without either it can only fail, so say what to change instead.
+            (async () => {
+                const steps = (list) => "<ol>" + list.map((step) => "<li>" + step + "</li>").join("") + "</ol>";
+                const reload = "Reload this page.";
+                const agent = navigator.userAgent;
+                let title, body, why;
+                if (!window.isSecureContext) {
+                    title = "This page needs a secure connection";
+                    body =
+                        "<p>Browsers only allow what the scanner's page needs on the computer the scanner is running on, " +
+                        "or over HTTPS.</p>" +
+                        steps([
+                            "On the computer running <code>scanner-web</code>, open <code>http://localhost:" +
+                                (location.port || "1515") +
+                                "/</code>.",
+                            "From another device, reach it through HTTPS, for example with a reverse proxy that has a certificate.",
+                        ]);
+                    why = "This page was opened over plain HTTP from another device (" + location.host + ").";
+                } else {
+                    let adapter = null;
+                    try {
+                        adapter = navigator.gpu ? await navigator.gpu.requestAdapter() : null;
+                    } catch (error) {}
+                    if (adapter && window.crossOriginIsolated) return;
+                    if (adapter) {
+                        title = "This page was served without the headers it needs";
+                        body =
+                            "<p>Open it from <code>scanner-web</code> itself. If something sits in between, such as a proxy, " +
+                            "it has to pass on the <code>Cross-Origin-Opener-Policy</code> and " +
+                            "<code>Cross-Origin-Embedder-Policy</code> headers.</p>";
+                        why = "Shared memory is unavailable (the page is not cross-origin isolated).";
+                    } else {
+                        title = "WebGPU is turned off in this browser";
+                        why = navigator.gpu
+                            ? "WebGPU is present, but the browser offered no graphics adapter."
+                            : "This browser does not offer WebGPU (navigator.gpu is missing).";
+                        if (agent.includes("Firefox")) {
+                            body = steps([
+                                "Open a new tab and go to <code>about:config</code>, accepting the warning.",
+                                "Search for <code>dom.webgpu.enabled</code> and set it to <code>true</code>.",
+                                reload,
+                            ]);
+                        } else if (agent.includes("Chrome")) {
+                            body = steps([
+                                "In <code>chrome://settings/system</code>, turn on graphics (hardware) acceleration.",
+                                "In <code>chrome://flags</code>, enable <code>#enable-unsafe-webgpu</code>" +
+                                    (agent.includes("Linux") ? " and <code>#enable-vulkan</code>" : "") +
+                                    ".",
+                                "Restart the browser and open this page again.",
+                            ]);
+                        } else if (agent.includes("Safari")) {
+                            body = steps([
+                                "Update to Safari 26 or later, where WebGPU is on by default.",
+                                "On older versions: Settings &gt; Advanced &gt; show features for web developers, " +
+                                    "then Feature Flags &gt; WebGPU.",
+                                reload,
+                            ]);
+                        } else {
+                            body = "<p>Use a current version of Chrome, Edge, Safari or Firefox with WebGPU turned on.</p>";
+                        }
+                        body = "<p>The scanner's page is drawn with WebGPU. To turn it on:</p>" + body;
+                    }
+                }
+                const notice = document.getElementById("notice");
+                notice.firstElementChild.innerHTML =
+                    "<h1>" + title + "</h1>" + body + '<p class="why">' + why + "</p>";
+                notice.style.display = "block";
+            })();
+        </script>
+    </body>
 </html>

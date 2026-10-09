@@ -28,7 +28,7 @@ dependencies = [
 
 [[package]]
 name = "airspy"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "cc",
  "libloading",
@@ -432,7 +432,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "audio"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "cpal",
 ]
@@ -3842,7 +3842,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "radiocore"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blip25-vocoder",
  "rustfft",
@@ -4016,7 +4016,7 @@ checksum = "03251193000f4bd3b042892be858ee50e8b3719f2b08e5833ac4353724632430"
 
 [[package]]
 name = "receiver"
-version = "0.2.0"
+version = "0.3.0"
 
 [[package]]
 name = "redox_syscall"
@@ -4176,7 +4176,7 @@ dependencies = [
 
 [[package]]
 name = "rtlsdr"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "libloading",
  "receiver",
@@ -4376,7 +4376,7 @@ dependencies = [
 
 [[package]]
 name = "scanner"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "airspy",
  "audio",
