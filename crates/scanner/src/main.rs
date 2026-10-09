@@ -8,6 +8,7 @@ use chrono::Local;
 use scanner::db::Db;
 use scanner::engine::{self, Config, Controls, Event, Source};
 use scanner::plan::{Kind, Plan};
+use scanner::radioreference::{self, Credentials, Imported};
 
 const USAGE: &str = "\
 usage: scanner [options] SYSTEM...     scan one or more systems
@@ -15,6 +16,8 @@ usage: scanner [options] SYSTEM...     scan one or more systems
        scanner channels SYSTEM...      list the channels of systems
        scanner import FILE [--name NAME] [--location PLACE] [--sites FILE]
        scanner remove SYSTEM
+       scanner radioreference system ID    import a trunked system by its system ID
+       scanner radioreference county ID    import a county's conventional channels
 
 SYSTEM is a system's number or name (or part of it) from `scanner systems`,
 or the path of a channel file to scan without importing it. Systems scanned
@@ -25,6 +28,11 @@ staying while there is traffic.
 `import` reads this program's own CSV format or a RadioReference CSV export:
 a conventional frequency list, or a trunked system's talkgroup list together
 with its site list (--sites) for P25 Phase 1 systems.
+
+`radioreference` fetches from RadioReference.com directly. It needs a premium
+account and an application key from RadioReference, given in the environment
+as RR_USERNAME, RR_PASSWORD and RR_APP_KEY. The IDs are the numbers in the
+page addresses: radioreference.com/db/sid/ID and .../db/browse/ctid/ID.
 
   -g, --gain N       Airspy linearity gain 0-21 (default 17)
   -s, --squelch DB   carrier level over the noise floor to open (default 6)
@@ -182,6 +190,36 @@ fn import(db: &mut Db, o: &Options, file: &str) {
     notes.iter().for_each(|n| println!("  note: {n}"));
 }
 
+fn import_radioreference(db: &mut Db, o: &Options, what: &str, id: &str) {
+    let var = |name: &str| std::env::var(name).unwrap_or_else(|_| die(format!("set {name} (see scanner --help)")));
+    let creds = Credentials {
+        username: var("RR_USERNAME"),
+        password: var("RR_PASSWORD"),
+        app_key: var("RR_APP_KEY"),
+    };
+    let id: i64 = id
+        .parse()
+        .unwrap_or_else(|_| die(format!("{id:?} is not a RadioReference ID number")));
+    let systems = match what {
+        "system" => radioreference::trunked_system(&creds, id).map(|system| vec![system]),
+        _ => radioreference::county_systems(&creds, id),
+    }
+    .unwrap_or_else(|e| die(e));
+    for Imported {
+        name,
+        location,
+        plan,
+        notes,
+    } in systems
+    {
+        let name = o.name.clone().unwrap_or(name);
+        let location = o.location.clone().unwrap_or(location);
+        let added = db.add_system(&name, &location, &plan).unwrap_or_else(|e| die(e));
+        println!("Added system {added}, {name:?}: {} channels", plan.entries.len());
+        notes.iter().for_each(|n| println!("  note: {n}"));
+    }
+}
+
 fn scan(o: &Options, plan: Plan) {
     let (lo, hi, _) = plan.span();
     let controls = Arc::new(Controls::new(&plan, o.volume, o.squelch_db));
@@ -244,7 +282,8 @@ fn main() {
             db.remove_system(system.id).unwrap_or_else(|e| die(e));
             println!("Removed system {}, {:?}", system.id, system.name);
         }
-        ["channels" | "import" | "remove", ..] => die(format!("wrong arguments\n{USAGE}")),
+        ["radioreference", what @ ("system" | "county"), id] => import_radioreference(&mut db, &o, what, id),
+        ["channels" | "import" | "remove" | "radioreference", ..] => die(format!("wrong arguments\n{USAGE}")),
         [] => {
             eprintln!("scanner: which system? These are in the channel database:\n");
             list_systems(&db);

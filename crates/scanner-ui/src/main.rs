@@ -122,6 +122,9 @@ struct ScannerView {
     session: Option<Session>,
     /// What went wrong last, shown until the next action succeeds.
     error: Option<String>,
+    /// Something worth knowing that isn't an error, such as what an import
+    /// brought in; shown until the next action.
+    notice: Option<String>,
     settings: Settings,
     /// Showing the settings page in place of the channels.
     show_settings: bool,
@@ -184,6 +187,7 @@ impl ScannerView {
             rate: None,
             session: None,
             error: None,
+            notice: None,
             settings: Settings::load(None),
             show_settings: false,
             themes: Vec::new(),
@@ -299,6 +303,7 @@ impl ScannerView {
     /// scanning, systems too far apart in frequency to share one tuning
     /// replace the selection instead.
     fn toggle_system(&mut self, id: i64) {
+        self.notice = None;
         if let Some(i) = self.selected.iter().position(|s| *s == id) {
             self.selected.remove(i);
         } else {
@@ -541,9 +546,18 @@ impl ScannerView {
         list.child(
             div()
                 .flex()
+                .flex_wrap()
                 .gap_2()
                 .px_4()
                 .py_3()
+                .child(
+                    button("radioreference", "RadioReference…", false, theme().accent).on_click(cx.listener(
+                        |this, _, window, cx| {
+                            this.import_from_radioreference(window);
+                            cx.notify();
+                        },
+                    )),
+                )
                 .child(
                     button("new-system", "New…", false, theme().accent).on_click(cx.listener(|this, _, window, cx| {
                         this.edit_system(None, window);
@@ -1306,6 +1320,9 @@ impl Render for ScannerView {
                         .child("Pick a system on the left to scan it."),
                 };
                 main.child(message.p_4())
+                    .when_some(self.notice.clone(), |main, notice| {
+                        main.child(div().px_4().text_sm().text_color(rgb(theme().muted)).child(notice))
+                    })
             }
             Some(session) => {
                 let live = session.live.lock().unwrap();
@@ -1321,6 +1338,17 @@ impl Render for ScannerView {
                                 .text_sm()
                                 .text_color(rgb(theme().error))
                                 .child(error),
+                        )
+                    })
+                    .when_some(self.notice.clone(), |main, notice| {
+                        main.child(
+                            div()
+                                .flex_none()
+                                .px_4()
+                                .py_2()
+                                .text_sm()
+                                .text_color(rgb(theme().muted))
+                                .child(notice),
                         )
                     })
                     .child(self.filter_bar(shown.len(), total, window, cx))

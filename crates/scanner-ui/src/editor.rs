@@ -1,8 +1,10 @@
-//! Editing the channel database from the app: forms for a system and for a
-//! channel, shown in place of the channel list.
+//! Editing the channel database from the app: forms for a system, for a
+//! channel and for importing from RadioReference, shown in place of the
+//! channel list.
 
 use gpui::{AnyElement, App, Context, KeyDownEvent, Window, div, prelude::*, px, rgb};
 use scanner::plan::{Entry, Kind, Plan};
+use scanner::radioreference::{self, Credentials, Imported};
 
 use crate::theme::theme;
 use crate::{ScannerView, button, section_title};
@@ -60,6 +62,10 @@ pub enum Editing {
     System(Option<i64>),
     /// A channel of `system`; the entry holds what the form doesn't show.
     Channel { system: i64, entry: Entry, mode: Mode },
+    /// An import from RadioReference.com: of a county's conventional
+    /// channels if `county`, otherwise of a trunked system. `busy` while
+    /// the import is under way.
+    RadioReference { county: bool, busy: bool },
 }
 
 struct Field {
@@ -89,6 +95,11 @@ const FREQUENCY: usize = 2;
 const TONE: usize = 3;
 const NAC: usize = 4;
 const TALKGROUP: usize = 5;
+// Fields of the RadioReference form.
+const RR_USERNAME: usize = 0;
+const RR_PASSWORD: usize = 1;
+const RR_APP_KEY: usize = 2;
+const RR_ID: usize = 3;
 
 impl Editor {
     fn field(label: &'static str, hint: &'static str, value: String) -> Field {
@@ -99,6 +110,7 @@ impl Editor {
     fn visible(&self) -> Vec<usize> {
         match &self.what {
             Editing::System(_) => vec![NAME, LOCATION, SITE_FREQUENCIES],
+            Editing::RadioReference { .. } => vec![RR_USERNAME, RR_PASSWORD, RR_APP_KEY, RR_ID],
             Editing::Channel { mode, .. } => match mode {
                 Mode::FmWide | Mode::FmNarrow => vec![NAME, DESCRIPTION, FREQUENCY, TONE],
                 Mode::P25 => vec![NAME, DESCRIPTION, FREQUENCY, NAC],
@@ -292,7 +304,132 @@ impl ScannerView {
         );
     }
 
+    /// Open the form for importing from RadioReference.com. The username
+    /// and application key are remembered from last time; the password
+    /// never is.
+    pub fn import_from_radioreference(&mut self, window: &mut Window) {
+        let saved = |key: &str| self.db.as_ref().and_then(|db| db.setting(key)).unwrap_or_default();
+        self.open_editor(
+            Editor {
+                what: Editing::RadioReference {
+                    county: false,
+                    busy: false,
+                },
+                fields: vec![
+                    Editor::field(
+                        "Username",
+                        "Your RadioReference username, not your email address",
+                        saved("rr_username"),
+                    ),
+                    Editor::field("Password", "Not saved", String::new()),
+                    Editor::field(
+                        "Application key",
+                        "Issued by RadioReference to developers on request",
+                        saved("rr_app_key"),
+                    ),
+                    Editor::field(
+                        "ID",
+                        "The number in the page address: …/db/sid/6919 or …/db/browse/ctid/223",
+                        String::new(),
+                    ),
+                ],
+                active: RR_USERNAME,
+                confirm_delete: false,
+                error: None,
+            },
+            window,
+        );
+    }
+
+    /// Fetch what the RadioReference form asks for, off the UI's thread,
+    /// and add it to the database when it arrives.
+    fn start_radioreference_import(&mut self, cx: &mut Context<Self>) {
+        let Some(editor) = &mut self.editor else { return };
+        let Editing::RadioReference { county, busy } = &mut editor.what else {
+            return;
+        };
+        if *busy {
+            return;
+        }
+        let creds = Credentials {
+            username: editor.fields[RR_USERNAME].value.trim().to_string(),
+            password: editor.fields[RR_PASSWORD].value.clone(),
+            app_key: editor.fields[RR_APP_KEY].value.trim().to_string(),
+        };
+        let id: Result<i64, _> = editor.fields[RR_ID].value.trim().parse();
+        let (Ok(id), false) = (
+            id,
+            creds.username.is_empty() || creds.password.is_empty() || creds.app_key.is_empty(),
+        ) else {
+            editor.error = Some("Fill in the username, password, application key and a numeric ID".into());
+            return;
+        };
+        if let Some(db) = &self.db {
+            db.set_setting("rr_username", &creds.username).ok();
+            db.set_setting("rr_app_key", &creds.app_key).ok();
+        }
+        let county = *county;
+        *busy = true;
+        editor.error = None;
+        let fetch = cx.background_executor().spawn(async move {
+            if county {
+                radioreference::county_systems(&creds, id)
+            } else {
+                radioreference::trunked_system(&creds, id).map(|system| vec![system])
+            }
+        });
+        cx.spawn(async move |this, cx| {
+            let fetched = fetch.await;
+            this.update(cx, |this, cx| {
+                this.finish_radioreference_import(fetched);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn finish_radioreference_import(&mut self, fetched: Result<Vec<Imported>, String>) {
+        // The form may have been closed while waiting; the import still counts.
+        let added = fetched.and_then(|systems| {
+            let db = self.db.as_mut().ok_or("no channel database")?;
+            let mut summary = Vec::new();
+            for system in systems {
+                db.add_system(&system.name, &system.location, &system.plan)?;
+                let mut line = format!("Imported {} ({} channels)", system.name, system.plan.entries.len());
+                if !system.notes.is_empty() {
+                    line.push_str(&format!(": {}", system.notes.join("; ")));
+                }
+                summary.push(line);
+            }
+            Ok(summary.join(". "))
+        });
+        match added {
+            Ok(summary) => {
+                if matches!(
+                    self.editor.as_ref().map(|e| &e.what),
+                    Some(Editing::RadioReference { .. })
+                ) {
+                    self.editor = None;
+                }
+                self.reload_systems();
+                self.notice = Some(summary);
+            }
+            Err(e) => {
+                if let Some(editor) = &mut self.editor
+                    && let Editing::RadioReference { busy, .. } = &mut editor.what
+                {
+                    *busy = false;
+                    editor.error = Some(e);
+                } else {
+                    self.error = Some(e);
+                }
+            }
+        }
+    }
+
     fn open_editor(&mut self, editor: Editor, window: &mut Window) {
+        self.notice = None;
         self.editor = Some(editor);
         self.show_settings = false;
         window.focus(&self.editor_focus);
@@ -306,7 +443,7 @@ impl ScannerView {
         let at = visible.iter().position(|&f| f == editor.active).unwrap_or(0);
         match event.keystroke.key.as_str() {
             "escape" => self.editor = None,
-            "enter" => self.save_editor(),
+            "enter" => self.save_editor(cx),
             "tab" => {
                 let step = if event.keystroke.modifiers.shift {
                     visible.len() - 1
@@ -329,7 +466,13 @@ impl ScannerView {
 
     /// Write the form to the database and rescan with the result. On a
     /// problem the form stays open and says what it is.
-    fn save_editor(&mut self) {
+    fn save_editor(&mut self, cx: &mut Context<Self>) {
+        if matches!(
+            self.editor.as_ref().map(|e| &e.what),
+            Some(Editing::RadioReference { .. })
+        ) {
+            return self.start_radioreference_import(cx);
+        }
         let (Some(editor), Some(db)) = (&self.editor, &mut self.db) else {
             return;
         };
@@ -351,6 +494,7 @@ impl ScannerView {
             Editing::Channel { system, entry, mode } => editor
                 .channel(entry, *mode)
                 .and_then(|channel| db.save_channel(*system, &channel).map(|_| ())),
+            Editing::RadioReference { .. } => Ok(()),
         };
         match saved {
             Ok(()) => self.close_editor(),
@@ -370,7 +514,7 @@ impl ScannerView {
         let deleted = match &editor.what {
             Editing::System(Some(id)) => db.remove_system(*id),
             Editing::Channel { entry, .. } => entry.channel_id.map_or(Ok(()), |id| db.delete_channel(id)),
-            Editing::System(None) => Ok(()),
+            Editing::System(None) | Editing::RadioReference { .. } => Ok(()),
         };
         match deleted {
             Ok(()) => self.close_editor(),
@@ -414,7 +558,9 @@ impl ScannerView {
                 },
                 entry.channel_id.is_some(),
             ),
+            Editing::RadioReference { .. } => ("Import from RadioReference", false),
         };
+        let importing = matches!(editor.what, Editing::RadioReference { busy: true, .. });
         let mut page = div()
             .id("editor")
             .track_focus(&self.editor_focus)
@@ -448,9 +594,39 @@ impl ScannerView {
             );
         }
 
+        if let Editing::RadioReference { county, .. } = editor.what {
+            let choices = [(false, "Trunked system (P25)"), (true, "County (conventional)")];
+            page = page.child(
+                div()
+                    .flex()
+                    .gap_1()
+                    .px_4()
+                    .py_2()
+                    .children(choices.map(|(choice, label)| {
+                        button(label, label, choice == county, theme().accent).on_click(cx.listener(
+                            move |this, _, _, cx| {
+                                if let Some(editor) = &mut this.editor
+                                    && let Editing::RadioReference { county, .. } = &mut editor.what
+                                {
+                                    *county = choice;
+                                }
+                                cx.notify();
+                            },
+                        ))
+                    })),
+            );
+        }
+
+        let is_import = matches!(editor.what, Editing::RadioReference { .. });
         for field in editor.visible() {
             let Field { label, hint, value } = &editor.fields[field];
             let active = field == editor.active;
+            // Passwords are shown as dots.
+            let value = &if is_import && field == RR_PASSWORD {
+                "•".repeat(value.chars().count())
+            } else {
+                value.clone()
+            };
             page = page.child(
                 div()
                     .px_4()
@@ -503,8 +679,18 @@ impl ScannerView {
             .px_4()
             .py_3()
             .child(
-                button("save", "Save", true, theme().accent).on_click(cx.listener(|this, _, _, cx| {
-                    this.save_editor();
+                button(
+                    "save",
+                    match (is_import, importing) {
+                        (false, _) => "Save",
+                        (true, false) => "Import",
+                        (true, true) => "Importing…",
+                    },
+                    !importing,
+                    theme().accent,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.save_editor(cx);
                     cx.notify();
                 })),
             )
@@ -555,6 +741,11 @@ impl ScannerView {
                     .text_color(rgb(theme().muted))
                     .child(match editor.what {
                         Editing::System(_) => "Tab moves between fields, Enter saves, Escape cancels.",
+                        Editing::RadioReference { .. } => {
+                            "Needs a RadioReference premium subscription and an application key. A county \
+                             import makes one system per category and can take a minute. Analog FM and \
+                             unencrypted P25 Phase 1 are imported; everything else is left out."
+                        }
                         Editing::Channel { .. } => {
                             "Tab moves between fields, Enter saves, Escape cancels. \
                          Channels higher in the list win when several are active."

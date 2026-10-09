@@ -217,7 +217,7 @@ pub struct Band {
     pub listeners: Vec<(f64, Listener)>,
 }
 
-fn entry(kind: Kind, tag: &str, desc: &str) -> Entry {
+pub(crate) fn entry(kind: Kind, tag: &str, desc: &str) -> Entry {
     Entry {
         channel_id: None,
         skip: false,
@@ -331,9 +331,40 @@ fn csv_rows(text: &str) -> impl Iterator<Item = (usize, impl Fn(&str) -> String)
     })
 }
 
-fn count_note(notes: &mut Vec<String>, count: usize, what: &str) {
+pub(crate) fn count_note(notes: &mut Vec<String>, count: usize, what: &str) {
     if count > 0 {
         notes.push(format!("{count} {what}"));
+    }
+}
+
+/// The kind of channel a RadioReference conventional frequency is, from its
+/// mode ("FM", "FMN", "P25"...) and tone ("114.8 PL", "CSQ", "023 DPL",
+/// "293 NAC" or nothing), and whether it uses a digital squelch code this
+/// scanner can't check. `None` for modes that can't be received.
+pub(crate) fn conventional_kind(mode: &str, tone: &str, freq_hz: f64) -> Option<(Kind, bool)> {
+    let (mode, tone) = (mode.trim().to_ascii_uppercase(), tone.trim().to_ascii_uppercase());
+    match mode.as_str() {
+        "P25" => {
+            let nac = tone.strip_suffix(" NAC").and_then(|n| u16::from_str_radix(n, 16).ok());
+            Some((Kind::Digital { freq_hz, nac }, false))
+        }
+        "FM" | "FMN" => {
+            let (tone_hz, coded) = match tone.split_once(' ') {
+                Some((hz, "PL")) => (hz.parse().ok(), false),
+                Some(_) => (None, true),
+                None => (None, false),
+            };
+            let narrow = mode == "FMN";
+            Some((
+                Kind::Analog {
+                    freq_hz,
+                    tone_hz,
+                    narrow,
+                },
+                coded,
+            ))
+        }
+        _ => None,
     }
 }
 
@@ -341,36 +372,16 @@ fn count_note(notes: &mut Vec<String>, count: usize, what: &str) {
 fn radioreference_conventional(text: &str, name: &str) -> Result<(Plan, Vec<String>), String> {
     let (mut plan, mut other_modes, mut coded) = (Plan::default(), 0, 0);
     for (lineno, get) in csv_rows(text) {
-        let mode = get("Mode").to_ascii_uppercase();
-        if !matches!(mode.as_str(), "FM" | "FMN" | "P25") {
-            other_modes += 1;
-            continue;
-        }
         let freq = get("Frequency Output");
         let freq_hz = freq
             .parse::<f64>()
             .map_err(|_| format!("{name}:{lineno}: bad frequency {freq:?}"))?
             * 1e6;
-        // "114.8 PL", "CSQ", "023 DPL", "293 NAC" or nothing.
-        let tone = get("PL Output Tone").to_ascii_uppercase();
-        let kind = if mode == "P25" {
-            let nac = tone.strip_suffix(" NAC").and_then(|n| u16::from_str_radix(n, 16).ok());
-            Kind::Digital { freq_hz, nac }
-        } else {
-            let tone_hz = match tone.split_once(' ') {
-                Some((hz, "PL")) => hz.parse().ok(),
-                Some(_) => {
-                    coded += 1;
-                    None
-                }
-                None => None,
-            };
-            Kind::Analog {
-                freq_hz,
-                tone_hz,
-                narrow: mode == "FMN",
-            }
+        let Some((kind, squelch_coded)) = conventional_kind(&get("Mode"), &get("PL Output Tone"), freq_hz) else {
+            other_modes += 1;
+            continue;
         };
+        coded += squelch_coded as usize;
         let (tag, desc) = (get("Alpha Tag"), get("Description"));
         let tag = if tag.is_empty() { desc.clone() } else { tag };
         plan.entries.push(entry(kind, &tag, &desc));

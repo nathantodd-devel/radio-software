@@ -4,4 +4,5 @@
 pub mod db;
 pub mod engine;
 pub mod plan;
+pub mod radioreference;
 mod wav;
