@@ -1,0 +1,10 @@
+/target
+# Built by cargo-ndk into the Gradle project.
+/android/gradle/app/src/main/jniLibs
+# Gradle and Android Studio.
+/android/gradle/.gradle
+/android/gradle/build
+/android/gradle/app/build
+/android/gradle/local.properties
+/android/gradle/.idea
+*.iml

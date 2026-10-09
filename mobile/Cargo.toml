@@ -1,0 +1,47 @@
+# The Android app. This is a project of its own, not a member of the main
+# workspace: gpui-mobile builds against a pinned revision of GPUI from the
+# Zed repository, which can't share a dependency graph with the desktop
+# app's GPUI release.
+
+[package]
+name = "airspy-scanner-mobile"
+version = "0.1.0"
+edition = "2024"
+description = "Airspy Scanner for Android"
+publish = false
+
+[workspace]
+
+[lib]
+# The library the Android activity loads; the name is repeated as
+# `nativeLibraryName` in android/gradle/app/build.gradle.kts.
+name = "airspy_scanner_mobile"
+crate-type = ["cdylib"]
+
+[dependencies]
+# From the local clone beside this folder. To build without it, use
+# { git = "https://github.com/itsbalamurali/gpui-mobile", rev = "c7cab3a43970bd5f1e05d907695404ed73fcdc95" }.
+gpui-mobile = { path = "../gpui-mobile" }
+# Must be the same revision gpui-mobile builds against.
+gpui = { git = "https://github.com/zed-industries/zed", rev = "5688167d224b5eca54875d49afb8bfd73a07915a", package = "gpui", default-features = false }
+log = "0.4"
+
+[target.'cfg(target_os = "android")'.dependencies]
+android_logger = "0.15"
+android-activity = { version = "0.6", features = ["native-activity"] }
+
+# gpui-mobile needs the fork of async-task that Zed uses.
+[patch.crates-io]
+async-task = { git = "https://github.com/smol-rs/async-task.git", rev = "b4486cd71e4e94fbda54ce6302444de14f4d190e" }
+
+# Without debug info the debug library is tens of megabytes, not hundreds;
+# panics still name the function they came from.
+[profile.dev]
+debug = false
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "abort"

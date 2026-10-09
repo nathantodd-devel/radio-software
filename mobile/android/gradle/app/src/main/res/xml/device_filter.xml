@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- USB devices this app offers to open when they are plugged in.
+     Vendor and product IDs are decimal: 7504:24737 is 1d50:60a1, the
+     Airspy R2 and Mini. -->
+<resources>
+    <usb-device vendor-id="7504" product-id="24737" />
+</resources>

@@ -1,3 +1,5 @@
 [workspace]
 resolver = "2"
 members = ["crates/drivers/airspy", "crates/drivers/audio", "crates/radiocore", "crates/scanner", "crates/scanner-ui"]
+# The Android app and the library it is built on are projects of their own.
+exclude = ["mobile", "gpui-mobile"]

@@ -1,0 +1,79 @@
+name: Android
+
+# Builds the Android app in mobile/. It runs only when that folder (or this
+# file) changes: a cold build compiles GPUI for Android and takes a while.
+on:
+  push:
+    branches: [main]
+    paths: ["mobile/**", ".github/workflows/android.yml"]
+  pull_request:
+    paths: ["mobile/**", ".github/workflows/android.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # mobile/ depends on gpui-mobile by path, from a clone beside it that is
+  # not part of this repository. Keep this in step with the clone you build
+  # against locally.
+  GPUI_MOBILE_REV: c7cab3a43970bd5f1e05d907695404ed73fcdc95
+  # The Android API level to link against; the app's minSdk.
+  ANDROID_API: "26"
+
+jobs:
+  build:
+    name: Build debug APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch gpui-mobile
+        uses: actions/checkout@v4
+        with:
+          repository: itsbalamurali/gpui-mobile
+          ref: ${{ env.GPUI_MOBILE_REV }}
+          path: gpui-mobile
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+          targets: aarch64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: mobile
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Format
+        working-directory: mobile
+        run: cargo fmt --check
+
+      # Phones only: the x86_64 library is for the emulator and would double
+      # the build time here.
+      - name: Build the Rust library
+        working-directory: mobile
+        run: |
+          # The runner image ships the NDK and says where in this variable.
+          export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          cargo ndk -t arm64-v8a -P "$ANDROID_API" -o android/gradle/app/src/main/jniLibs build --locked
+
+      - name: Build the APK
+        working-directory: mobile/android/gradle
+        run: ./gradlew --no-daemon assembleDebug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: airspy-scanner-android-debug
+          path: mobile/android/gradle/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error

@@ -1,6 +1,7 @@
 name: Release
 
-# Push a tag like v0.1.0 to build all platforms and publish a GitHub release.
+# Push a tag like v0.1.0 to build all platforms, the Android app included,
+# and publish a GitHub release.
 # Run it by hand (Actions > Release > Run workflow) to get the same builds as
 # downloadable artifacts without publishing anything.
 on:
@@ -101,10 +102,85 @@ jobs:
             dist/*.tar.gz
           if-no-files-found: error
 
+  # The Android app is a project of its own (mobile/), built on gpui-mobile.
+  android:
+    name: android-arm64
+    runs-on: ubuntu-latest
+    env:
+      # Keep in step with .github/workflows/android.yml.
+      GPUI_MOBILE_REV: c7cab3a43970bd5f1e05d907695404ed73fcdc95
+      ANDROID_API: "26"
+      # Set these four repository secrets to sign the APK with your own key.
+      # Without them it is signed with a throwaway debug key instead.
+      KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch gpui-mobile
+        uses: actions/checkout@v4
+        with:
+          repository: itsbalamurali/gpui-mobile
+          ref: ${{ env.GPUI_MOBILE_REV }}
+          path: gpui-mobile
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: mobile
+          key: release
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Build the Rust library
+        working-directory: mobile
+        run: |
+          # The runner image ships the NDK and says where in this variable.
+          export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          cargo ndk -t arm64-v8a -P "$ANDROID_API" -o android/gradle/app/src/main/jniLibs build --release --locked
+
+      - name: Build the APK
+        working-directory: mobile/android/gradle
+        run: |
+          name="airspy-scanner-${{ github.ref_type == 'tag' && github.ref_name || github.sha }}-android-arm64"
+          version="${{ github.ref_type == 'tag' && github.ref_name || '0.0.0' }}"
+          props="-PversionName=${version#v} -PversionCode=${{ github.run_number }}"
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            export ANDROID_KEYSTORE_FILE="$RUNNER_TEMP/release.keystore"
+            echo "$KEYSTORE_BASE64" | base64 --decode > "$ANDROID_KEYSTORE_FILE"
+            ./gradlew --no-daemon assembleRelease $props
+            cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/dist/$name.apk"
+          else
+            # No signing key: a debug-signed APK around the release library.
+            # It installs, but can't be updated in place by a later release.
+            echo "::warning::No signing secrets set; the APK is signed with a debug key."
+            ./gradlew --no-daemon assembleDebug $props
+            cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/dist/$name.apk"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: airspy-scanner-android-arm64
+          path: dist/*.apk
+          if-no-files-found: error
+
   publish:
     name: Publish release
     if: github.ref_type == 'tag'
-    needs: build
+    needs: [build, android]
     runs-on: ubuntu-latest
     permissions:
       contents: write
