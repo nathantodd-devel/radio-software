@@ -9,5 +9,8 @@ description = "The scanner as a web server: scan here, listen and control from a
 scanner = { path = "../scanner", version = "0.3.0" }
 scanner-proto = { path = "../scanner-proto", version = "0.3.0" }
 ctrlc = "3"
+# For serving over HTTPS. With the same cryptography library the rest of the
+# workspace already builds.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 serde_json = "1"
 tungstenite = "0.30"

@@ -5,12 +5,15 @@ mod http;
 mod hub;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use rustls::ServerConfig;
+use rustls::pki_types::pem::PemObject;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use scanner::db::Db;
 
 use hub::{Clients, Hub};
@@ -30,7 +33,12 @@ can listen and change settings.
       --web-root DIR the built browser client (default: a `web` folder beside
                      this program, otherwise web/dist under the current folder)
       --local-audio  also play through this computer's speakers
-      --db FILE      channel database (default: as for the desktop app)";
+      --db FILE      channel database (default: as for the desktop app)
+      --tls-cert FILE, --tls-key FILE
+                     serve over HTTPS with this certificate (PEM, with any
+                     intermediate certificates after it) and its private key
+                     (PEM). Browsers on other devices need HTTPS to run the
+                     page; give both options or neither";
 
 const DEFAULT_PORT: u16 = 1515;
 /// How often listeners are told how every channel stands.
@@ -51,9 +59,28 @@ fn default_web_root() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("web/dist"))
 }
 
+/// What is needed to serve over HTTPS with the certificate and private key
+/// in these PEM files.
+fn tls_config(cert: &Path, key: &Path) -> Result<Arc<ServerConfig>, String> {
+    let certs = CertificateDer::pem_file_iter(cert)
+        .and_then(Iterator::collect::<Result<Vec<_>, _>>)
+        .map_err(|e| format!("can't read the certificate in {}: {e}", cert.display()))?;
+    if certs.is_empty() {
+        return Err(format!("there is no certificate in {}", cert.display()));
+    }
+    let key = PrivateKeyDer::from_pem_file(key)
+        .map_err(|e| format!("can't read the private key in {}: {e}", key.display()))?;
+    let config = ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+        .with_safe_default_protocol_versions()
+        .and_then(|builder| builder.with_no_client_auth().with_single_cert(certs, key))
+        .map_err(|e| format!("can't use that certificate and key: {e}"))?;
+    Ok(Arc::new(config))
+}
+
 fn main() {
     let (mut address, mut port) = (IpAddr::V4(Ipv4Addr::LOCALHOST), DEFAULT_PORT);
     let (mut web_root, mut db_path, mut local_audio) = (default_web_root(), Db::default_path(), false);
+    let (mut tls_cert, mut tls_key) = (None, None);
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         let mut value = || args.next().unwrap_or_else(|| die(format!("{a} needs a value")));
@@ -71,6 +98,8 @@ fn main() {
             "--web-root" => web_root = PathBuf::from(value()),
             "--db" => db_path = PathBuf::from(value()),
             "--local-audio" => local_audio = true,
+            "--tls-cert" => tls_cert = Some(PathBuf::from(value())),
+            "--tls-key" => tls_key = Some(PathBuf::from(value())),
             "-h" | "--help" => {
                 println!("{USAGE}");
                 exit(0)
@@ -79,6 +108,11 @@ fn main() {
         }
     }
 
+    let tls = match (tls_cert, tls_key) {
+        (Some(cert), Some(key)) => Some(tls_config(&cert, &key).unwrap_or_else(|e| die(e))),
+        (None, None) => None,
+        _ => die("--tls-cert and --tls-key go together"),
+    };
     let db = Db::open(&db_path).unwrap_or_else(|e| die(e));
     let listener = TcpListener::bind(SocketAddr::new(address, port))
         .unwrap_or_else(|e| die(format!("can't listen on {address}:{port}: {e}")));
@@ -99,15 +133,19 @@ fn main() {
         }
     }
 
+    let scheme = if tls.is_some() { "https" } else { "http" };
     if address.is_loopback() {
-        println!("Serving on http://localhost:{port}/ to this computer only (see --listen).");
+        println!("Serving on {scheme}://localhost:{port}/ to this computer only (see --listen).");
     } else {
         if address.is_unspecified() {
-            println!("Serving on port {port}: http://localhost:{port}/ here, this computer's address elsewhere.");
+            println!("Serving on port {port}: {scheme}://localhost:{port}/ here, this computer's address elsewhere.");
         } else {
-            println!("Serving on http://{address}:{port}/");
+            println!("Serving on {scheme}://{address}:{port}/");
         }
         println!("There is no login: anyone who can reach it can listen and change settings.");
+        if tls.is_none() {
+            println!("Browsers on other devices only run the page over HTTPS: see --tls-cert and --tls-key.");
+        }
     }
     if !web_root.join("index.html").is_file() {
         eprintln!(
@@ -142,7 +180,7 @@ fn main() {
             break;
         }
         let Ok(stream) = stream else { continue };
-        let (hub, clients, web_root) = (hub.clone(), clients.clone(), web_root.clone());
-        std::thread::spawn(move || http::serve(stream, &hub, &clients, &web_root));
+        let (hub, clients, web_root, tls) = (hub.clone(), clients.clone(), web_root.clone(), tls.clone());
+        std::thread::spawn(move || http::serve(stream, tls, &hub, &clients, &web_root));
     }
 }

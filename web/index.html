@@ -90,7 +90,10 @@
                             "On the computer running <code>scanner-web</code>, open <code>http://localhost:" +
                                 (location.port || "1515") +
                                 "/</code>.",
-                            "From another device, reach it through HTTPS, for example with a reverse proxy that has a certificate.",
+                            "From another device, use HTTPS: start it with <code>scanner-web --tls-cert cert.pem --tls-key " +
+                                "key.pem</code> and open <code>https://" +
+                                location.host +
+                                "/</code>. The README says how to make a certificate.",
                         ]);
                     why = "This page was opened over plain HTTP from another device (" + location.host + ").";
                 } else {

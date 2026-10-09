@@ -5075,6 +5075,7 @@ name = "scanner-web"
 version = "0.3.0"
 dependencies = [
  "ctrlc",
+ "rustls",
  "scanner",
  "scanner-proto",
  "serde_json",

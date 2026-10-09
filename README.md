@@ -204,6 +204,7 @@ scanner-web --help
 | `--local-audio` | Also play through this computer's speakers |
 | `--web-root DIR` | Where the page's files are (default: a `web` folder beside the program) |
 | `--db FILE` | Channel database to use |
+| `--tls-cert FILE` `--tls-key FILE` | Serve over HTTPS with this certificate and private key (PEM files) |
 
 The page shows the systems in the channel database and lets you choose which to scan; the
 channels being scanned, with their signal levels and hold, skip, priority and record buttons;
@@ -224,8 +225,21 @@ Things to know:
   in `about:config`) and downloads about 10 MB the first time. Where WebGPU is off, the page
   says how to turn it on.
 - From another device the page needs HTTPS: over plain HTTP, browsers only allow what it uses
-  on `localhost`. `scanner-web` does not serve HTTPS itself, so put a reverse proxy with a
-  certificate in front of it.
+  on `localhost`. Give `scanner-web` a certificate and its key and it serves HTTPS instead:
+
+  ```sh
+  scanner-web --listen all --tls-cert cert.pem --tls-key key.pem   # https://<this computer>:1515/
+  ```
+
+  The certificate file holds your certificate followed by any intermediates. One you make
+  yourself works too, once each browser has been told to accept it:
+
+  ```sh
+  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 365 \
+      -subj "/CN=scanner" -addext "subjectAltName=IP:192.168.1.20" -keyout key.pem -out cert.pem
+  ```
+
+  (with the address other devices reach this computer at).
 - Channels are added and edited with the desktop app or the command line, not from the page.
 
 ## The channel database

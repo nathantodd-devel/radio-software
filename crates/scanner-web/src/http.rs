@@ -4,66 +4,137 @@
 use std::io::{ErrorKind, Read, Write};
 use std::net::TcpStream;
 use std::path::Path;
-use std::sync::Mutex;
 use std::sync::mpsc::sync_channel;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use rustls::{ServerConfig, ServerConnection, StreamOwned};
 use scanner_proto::{ClientMessage, SOCKET_PATH};
-use tungstenite::Message;
-use tungstenite::handshake::server::{ErrorResponse, Request, Response};
-use tungstenite::http::StatusCode;
+use tungstenite::handshake::derive_accept_key;
+use tungstenite::protocol::Role;
+use tungstenite::{Message, WebSocket};
 
 use crate::hub::{CLIENT_QUEUE, Clients, Hub, Outgoing};
 
 /// How long a listener's thread waits for it to say something before
 /// turning to what there is to send it.
 const POLL: Duration = Duration::from_millis(20);
-/// How long a listener may take to accept a message.
+/// How long a browser may take over its request, or to accept what it is
+/// sent.
 const STALLED: Duration = Duration::from_secs(10);
 /// Longest request head read; ours are a few hundred bytes.
 const MAX_HEAD: usize = 16 * 1024;
 
-/// Deal with one connection, whichever kind it turns out to be.
-pub fn serve(stream: TcpStream, hub: &Mutex<Hub>, clients: &Clients, web_root: &Path) {
-    stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
-    // Look at the request without consuming it: a WebSocket's handshake has
-    // to be read by the WebSocket library.
-    let mut start = [0u8; 1024];
-    let seen = stream.peek(&mut start).unwrap_or(0);
-    let request = String::from_utf8_lossy(&start[..seen]);
-    let path = request.split_whitespace().nth(1).unwrap_or("");
-    if path == SOCKET_PATH {
-        listen(stream, hub, clients);
-    } else {
-        send_file(stream, web_root).ok();
+/// A connection to a browser, encrypted or not.
+trait Stream: Read + Write {}
+impl<T: Read + Write> Stream for T {}
+
+/// The start of a request: everything before its body.
+struct Head {
+    method: String,
+    /// What was asked for, as sent: path and any query.
+    target: String,
+    /// Names in lower case.
+    headers: Vec<(String, String)>,
+}
+
+impl Head {
+    /// Read a request's head. `None` if the connection closed, stalled or
+    /// sent something else.
+    fn read(stream: &mut dyn Stream) -> Option<Self> {
+        let mut head = Vec::new();
+        let mut chunk = [0u8; 1024];
+        while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+            match stream.read(&mut chunk).ok()? {
+                0 => return None,
+                _ if head.len() > MAX_HEAD => return None,
+                n => head.extend_from_slice(&chunk[..n]),
+            }
+        }
+        let head = String::from_utf8_lossy(&head);
+        let mut lines = head.split("\r\n");
+        let mut request = lines.next()?.split(' ');
+        Some(Self {
+            method: request.next()?.to_string(),
+            target: request.next()?.to_string(),
+            headers: lines
+                .filter_map(|line| line.split_once(':'))
+                .map(|(name, value)| (name.trim().to_ascii_lowercase(), value.trim().to_string()))
+                .collect(),
+        })
+    }
+
+    fn header(&self, name: &str) -> Option<&str> {
+        self.headers.iter().find(|h| h.0 == name).map(|h| h.1.as_str())
     }
 }
 
+/// Deal with one connection, whichever kind it turns out to be. With `tls`
+/// it is encrypted.
+pub fn serve(tcp: TcpStream, tls: Option<Arc<ServerConfig>>, hub: &Mutex<Hub>, clients: &Clients, web_root: &Path) {
+    tcp.set_read_timeout(Some(STALLED)).ok();
+    // A browser that stops taking what it is sent is dropped.
+    tcp.set_write_timeout(Some(STALLED)).ok();
+    // Kept to change the timeouts once the connection is wrapped up.
+    let Ok(socket) = tcp.try_clone() else { return };
+    let mut stream: Box<dyn Stream> = match tls.map(ServerConnection::new) {
+        Some(Ok(session)) => Box::new(StreamOwned::new(session, tcp)),
+        Some(Err(_)) => return,
+        None => Box::new(tcp),
+    };
+    let Some(head) = Head::read(&mut *stream) else { return };
+    if head.target == SOCKET_PATH {
+        listen(stream, &socket, &head, hub, clients);
+    } else {
+        send_file(stream, &head, web_root).ok();
+    }
+}
+
+/// Answer a request that is being refused.
+fn refuse(mut stream: Box<dyn Stream>, status: &str, why: &str) {
+    write!(
+        stream,
+        "HTTP/1.1 {status}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\n\
+         Connection: close\r\n\r\n{why}",
+        why.len()
+    )
+    .ok();
+    stream.flush().ok();
+}
+
 /// Run one listener's WebSocket until it goes away.
-fn listen(stream: TcpStream, hub: &Mutex<Hub>, clients: &Clients) {
+fn listen(mut stream: Box<dyn Stream>, socket: &TcpStream, head: &Head, hub: &Mutex<Hub>, clients: &Clients) {
+    let upgrade = head
+        .header("upgrade")
+        .is_some_and(|u| u.eq_ignore_ascii_case("websocket"));
+    let (Some(key), true) = (head.header("sec-websocket-key"), upgrade) else {
+        return refuse(
+            stream,
+            "400 Bad Request",
+            "This address is for the scanner's page to connect to.\n",
+        );
+    };
     // Browsers let any page open a WebSocket to any address, so without this
     // check a page from elsewhere could listen in and change settings
     // through a visitor's browser. Programs that aren't browsers send no
     // Origin and are let through.
-    // The refusal's type is the WebSocket library's to choose.
-    #[allow(clippy::result_large_err)]
-    let same_origin = |request: &Request, response: Response| {
-        let header = |name| request.headers().get(name).and_then(|value| value.to_str().ok());
-        match (header("origin"), header("host")) {
-            (Some(origin), Some(host)) if origin.split("://").nth(1) != Some(host) => {
-                let mut refusal = ErrorResponse::new(Some("This page isn't the scanner's.".into()));
-                *refusal.status_mut() = StatusCode::FORBIDDEN;
-                Err(refusal)
-            }
-            _ => Ok(response),
-        }
-    };
-    let Ok(mut socket) = tungstenite::accept_hdr(stream, same_origin) else {
+    if let (Some(origin), Some(host)) = (head.header("origin"), head.header("host"))
+        && origin.split("://").nth(1) != Some(host)
+    {
+        return refuse(stream, "403 Forbidden", "This page isn't the scanner's.\n");
+    }
+    let accepted = write!(
+        stream,
+        "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\
+         Sec-WebSocket-Accept: {}\r\n\r\n",
+        derive_accept_key(key.as_bytes())
+    )
+    .and_then(|()| stream.flush());
+    if accepted.is_err() {
         return;
-    };
-    socket.get_ref().set_read_timeout(Some(POLL)).ok();
-    // A listener that stops taking what it is sent is dropped.
-    socket.get_ref().set_write_timeout(Some(STALLED)).ok();
+    }
+    let mut socket_stream = WebSocket::from_raw_socket(stream, Role::Server, None);
+    socket.set_read_timeout(Some(POLL)).ok();
     let (sender, outgoing) = sync_channel(CLIENT_QUEUE);
     // Greeted and added under one lock, so nothing sent to everyone in
     // between is missed.
@@ -72,14 +143,15 @@ fn listen(stream: TcpStream, hub: &Mutex<Hub>, clients: &Clients) {
         clients.add(sender);
         hub.greeting()
     };
-    let send = |socket: &mut tungstenite::WebSocket<TcpStream>, message: Outgoing| {
+    let send = |socket: &mut WebSocket<Box<dyn Stream>>, message: Outgoing| {
         socket.send(match message {
             Outgoing::Text(json) => Message::text(&*json),
             Outgoing::Audio(pcm) => Message::binary(pcm.to_vec()),
         })
     };
+    let socket = &mut socket_stream;
     for message in greeting {
-        if send(&mut socket, message).is_err() {
+        if send(socket, message).is_err() {
             return;
         }
     }
@@ -97,7 +169,7 @@ fn listen(stream: TcpStream, hub: &Mutex<Hub>, clients: &Clients) {
             Err(_) => return,
         }
         for message in outgoing.try_iter() {
-            if send(&mut socket, message).is_err() {
+            if send(socket, message).is_err() {
                 return;
             }
         }
@@ -119,18 +191,8 @@ fn content_type(path: &str) -> &'static str {
 }
 
 /// Answer an HTTP request for one of the client's files.
-fn send_file(mut stream: TcpStream, web_root: &Path) -> std::io::Result<()> {
-    let mut head = Vec::new();
-    let mut chunk = [0u8; 1024];
-    while !head.windows(4).any(|w| w == b"\r\n\r\n") && head.len() < MAX_HEAD {
-        match stream.read(&mut chunk)? {
-            0 => break,
-            n => head.extend_from_slice(&chunk[..n]),
-        }
-    }
-    let head = String::from_utf8_lossy(&head);
-    let mut words = head.split_whitespace();
-    let (method, target) = (words.next().unwrap_or(""), words.next().unwrap_or(""));
+fn send_file(mut stream: Box<dyn Stream>, head: &Head, web_root: &Path) -> std::io::Result<()> {
+    let (method, target) = (head.method.as_str(), head.target.as_str());
     let path = target.split(['?', '#']).next().unwrap_or("").trim_start_matches('/');
     let path = if path.is_empty() { "index.html" } else { path };
 
