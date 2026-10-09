@@ -1216,8 +1216,20 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
         }
     }
 
-    for (w, _) in recorders.into_iter().flatten() {
-        w.finish();
+    // Calls cut short by stopping end here, so that nothing is left open.
+    for (c, recorder) in recorders.into_iter().enumerate() {
+        let recording = recorder.map(|(w, path)| {
+            w.finish();
+            path
+        });
+        if open_blocks[c] > 0 {
+            on_event(Event::Closed {
+                channel: c,
+                secs: open_blocks[c] as f32 * block_secs,
+                unit: row_unit[c].take(),
+                recording,
+            });
+        }
     }
     drop(speaker);
     if let Some(failure) = failure {

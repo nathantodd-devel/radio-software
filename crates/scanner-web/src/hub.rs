@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex};
 
 use scanner::db::Db;
 use scanner::engine::{self, Config, Radio, ScanMode};
-use scanner::plan::{Kind, Plan};
-use scanner::session::Session;
+use scanner::plan::Plan;
+use scanner::session::{self, History, Session};
 use scanner::settings::{AUTO_DEVICE, Settings};
 use scanner_proto::{
     AUDIO_RATE, Band, Call, Channel, ChannelState, Choice, ClientMessage, Options, ServerMessage, Status, System,
@@ -68,6 +68,8 @@ pub struct Hub {
     /// The receiver that was found when last looked for.
     radio: Option<Radio>,
     session: Option<Session>,
+    /// The activity log from before the scan was last restarted.
+    history: History,
     /// Why nothing is being scanned, when nothing is.
     problem: Option<String>,
     /// Also play through this computer's speakers.
@@ -89,9 +91,17 @@ impl Hub {
             settings,
             radio: None,
             session: None,
+            history: History::default(),
             problem: None,
             local_audio,
             clients,
+        }
+    }
+
+    /// Stop scanning, keeping the activity log for the next scan.
+    fn stop_scanning(&mut self) {
+        if let Some(session) = self.session.take() {
+            self.history = session.end();
         }
     }
 
@@ -103,7 +113,7 @@ impl Hub {
     /// Look for the kind of receiver the settings ask for. It can't be
     /// asked what it offers while it is in use, so this stops any scan.
     pub fn find_receiver(&mut self) {
-        self.session = None;
+        self.stop_scanning();
         let source = Config {
             source: self.settings.source(),
             ..Config::default()
@@ -146,7 +156,7 @@ impl Hub {
     /// Scan the selected systems.
     pub fn start(&mut self) {
         // Only one scan can hold the receiver: stop the old one first.
-        self.session = None;
+        self.stop_scanning();
         if self.radio.is_none() {
             return;
         }
@@ -183,7 +193,10 @@ impl Hub {
                     }
                 };
                 let (volume, squelch_db) = (self.settings.volume, self.settings.squelch_db);
-                self.session = Some(Session::start_with_audio(plan, config, volume, squelch_db, audio));
+                let history = std::mem::take(&mut self.history);
+                self.session = Some(Session::start_with_audio(
+                    plan, config, volume, squelch_db, history, audio,
+                ));
             }
             Err(e) => self.problem = Some(e),
         }
@@ -191,7 +204,7 @@ impl Hub {
 
     /// Stop scanning and clear up, before the program exits.
     pub fn shut_down(&mut self) {
-        self.session = None;
+        self.stop_scanning();
         if !self.settings.save_recordings {
             std::fs::remove_dir_all(self.recordings_dir()).ok();
         }
@@ -266,8 +279,21 @@ impl Hub {
     }
 
     fn status(&self) -> ServerMessage {
+        // A call in the activity log, as listeners are sent it.
+        let call = |call: &session::Call| Call {
+            id: call.id,
+            time: call.time.clone(),
+            channel: call.channel,
+            name: call.name.clone(),
+            unit: call.unit,
+            snr_db: call.snr_db,
+            secs: call.secs,
+            played: call.played,
+            recorded: call.recording.is_some(),
+        };
         let Some(session) = &self.session else {
             return ServerMessage::Status(Status {
+                log: self.history.log().iter().take(LOG_LEN).map(call).collect(),
                 problem: Some(self.problem.clone().unwrap_or_else(|| "Not scanning.".into())),
                 ..Status::default()
             });
@@ -296,25 +322,7 @@ impl Hub {
                 hi_hz,
             }),
             replaying: controls.replaying(),
-            log: live
-                .log
-                .iter()
-                .take(LOG_LEN)
-                .map(|call| Call {
-                    id: call.id,
-                    time: call.time.clone(),
-                    channel: call.channel,
-                    name: match (&entries[call.channel].kind, call.talkgroup) {
-                        (Kind::OtherTalkgroups { .. }, Some(talkgroup)) => format!("Talkgroup {talkgroup}"),
-                        (_, _) => entries[call.channel].tag.clone(),
-                    },
-                    unit: call.unit,
-                    snr_db: call.snr_db,
-                    secs: call.secs,
-                    played: call.played,
-                    recorded: call.recording.is_some(),
-                })
-                .collect(),
+            log: live.log.iter().take(LOG_LEN).map(call).collect(),
             problem: live.error.clone(),
         })
     }

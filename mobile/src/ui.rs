@@ -9,8 +9,7 @@ use gpui::{Context, Div, FontWeight, SharedString, Stateful, Window, div, prelud
 use gpui_mobile::android::jni;
 use scanner::db::{Db, System};
 use scanner::engine::{self, Config, ScanMode, Source};
-use scanner::plan::Kind;
-use scanner::session::{Live, Session};
+use scanner::session::{History, Live, Session};
 
 use crate::usb::{self, Opened};
 
@@ -66,6 +65,8 @@ pub struct ScannerApp {
     /// The sample rates the Airspy offers, once it has been asked.
     rates: Vec<u32>,
     session: Option<Session>,
+    /// The activity log from before the scan was last restarted.
+    history: History,
     /// Why nothing is being scanned, when nothing is.
     status: String,
     tab: Tab,
@@ -102,6 +103,7 @@ impl ScannerApp {
             airspy: None,
             rates: Vec::new(),
             session: None,
+            history: History::default(),
             status,
             tab: Tab::Channels,
             expanded: None,
@@ -137,6 +139,13 @@ impl ScannerApp {
         app
     }
 
+    /// Stop scanning, keeping the activity log for the next scan.
+    fn stop_scanning(&mut self) {
+        if let Some(session) = self.session.take() {
+            self.history = session.end();
+        }
+    }
+
     fn recordings_dir(&self) -> PathBuf {
         self.data_dir.join("recordings")
     }
@@ -166,7 +175,7 @@ impl ScannerApp {
 
     /// Find the Airspy, asking Android for it, and start scanning.
     fn connect(&mut self) {
-        self.session = None;
+        self.stop_scanning();
         self.airspy = None;
         self.status = match usb::open() {
             Opened::Fd(fd) => {
@@ -193,7 +202,7 @@ impl ScannerApp {
     /// Scan the selected systems, if there is an Airspy to scan with.
     fn start(&mut self) {
         // Only one receiver can hold the Airspy: stop the old one first.
-        self.session = None;
+        self.stop_scanning();
         self.expanded = None;
         let (Some(fd), Some(db)) = (self.airspy, &self.db) else {
             return;
@@ -214,7 +223,14 @@ impl ScannerApp {
                     ..Config::default()
                 };
                 self.status.clear();
-                self.session = Some(Session::start(plan, config, self.volume, self.squelch_db));
+                let history = std::mem::take(&mut self.history);
+                self.session = Some(Session::start_after(
+                    plan,
+                    config,
+                    self.volume,
+                    self.squelch_db,
+                    history,
+                ));
             }
             Err(e) => self.status = e,
         }
@@ -535,11 +551,7 @@ impl ScannerApp {
             )
             .when(live.log.is_empty(), |log| log.child(note("Nothing heard yet.")))
             .children(live.log.iter().enumerate().map(|(i, call)| {
-                let entry = &session.plan.entries[call.channel];
-                let who = match (&entry.kind, call.talkgroup) {
-                    (Kind::OtherTalkgroups { .. }, Some(talkgroup)) => format!("Talkgroup {talkgroup}"),
-                    (_, _) => entry.tag.clone(),
-                };
+                let who = call.name.clone();
                 let detail = format!(
                     "{}  ·  {:+.0} dB  ·  {}{}",
                     call.time,

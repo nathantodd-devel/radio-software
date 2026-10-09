@@ -16,7 +16,7 @@ use gpui::{
 };
 use scanner::db::{Db, System};
 use scanner::engine::{self, Config, Radio, ScanMode};
-use scanner::plan::{Kind, Plan};
+use scanner::plan::Plan;
 use scanner::session::{self, Live, Session};
 use scanner::settings::{AUTO_DEVICE, Settings};
 use theme::theme;
@@ -86,6 +86,8 @@ struct ScannerView {
     radio: Option<Radio>,
     /// `None` while nothing is selected or the scan couldn't start.
     session: Option<Session>,
+    /// The activity log from before the scan was last restarted.
+    history: session::History,
     /// What went wrong last, shown until the next action succeeds.
     error: Option<String>,
     /// Something worth knowing that isn't an error, such as what an import
@@ -152,6 +154,7 @@ impl ScannerView {
             selected: Vec::new(),
             radio: None,
             session: None,
+            history: session::History::default(),
             error: None,
             notice: None,
             settings: Settings::load(None),
@@ -217,11 +220,17 @@ impl ScannerView {
         self.db.as_ref().ok_or("no channel database")?.plan(systems)
     }
 
-    /// Scan the selected systems.
+    /// Stop scanning, keeping the activity log for the next scan.
+    fn stop_scanning(&mut self) {
+        if let Some(session) = self.session.take() {
+            self.history = session.end();
+        }
+    }
+
     /// Look for the kind of receiver the settings ask for. It can't be
     /// asked what it offers while it is in use, so this stops any scan.
     fn find_receiver(&mut self) {
-        self.session = None;
+        self.stop_scanning();
         let source = Config {
             source: self.settings.source(),
             ..Config::default()
@@ -235,9 +244,10 @@ impl ScannerView {
         }
     }
 
+    /// Scan the selected systems.
     fn start(&mut self) {
         // Only one scan can hold the receiver: stop the old one first.
-        self.session = None;
+        self.stop_scanning();
         self.error = None;
         if self.selected.is_empty() {
             return;
@@ -260,7 +270,8 @@ impl ScannerView {
                     ..Config::default()
                 };
                 let (volume, squelch_db) = (self.settings.volume, self.settings.squelch_db);
-                self.session = Some(Session::start(plan, config, volume, squelch_db));
+                let history = std::mem::take(&mut self.history);
+                self.session = Some(Session::start_after(plan, config, volume, squelch_db, history));
             }
             Err(e) => self.error = Some(e),
         }
@@ -815,12 +826,13 @@ impl ScannerView {
     }
 
     /// Whether the filter's words let a call in the activity log be shown.
-    fn shows_call(&self, call: &session::Call, session: &Session) -> bool {
-        let e = &session.plan.entries[call.channel];
+    fn shows_call(&self, call: &session::Call) -> bool {
         let talkgroup = call.talkgroup.map_or(String::new(), |tg| format!("talkgroup {tg}"));
         let unit = call.unit.map_or(String::new(), |unit| format!("unit {unit}"));
-        self.filter
-            .matches(&format!("{} {} {} {talkgroup} {unit}", e.id(), e.tag, e.desc))
+        self.filter.matches(&format!(
+            "{} {} {} {talkgroup} {unit}",
+            call.label, call.name, call.description
+        ))
     }
 
     /// The search box and toggles above the channel list. `shown` of
@@ -956,13 +968,9 @@ impl ScannerView {
                 live.log
                     .iter()
                     .enumerate()
-                    .filter(|(_, call)| self.shows_call(call, session))
+                    .filter(|(_, call)| self.shows_call(call))
                     .map(|(i, call)| {
-                        let entry = &session.plan.entries[call.channel];
-                        let mut who = match (&entry.kind, call.talkgroup) {
-                            (Kind::OtherTalkgroups { .. }, Some(talkgroup)) => format!("Talkgroup {talkgroup}"),
-                            (_, _) => entry.tag.clone(),
-                        };
+                        let mut who = call.name.clone();
                         if let Some(unit) = call.unit {
                             who.push_str(&format!("  ·  unit {unit}"));
                         }

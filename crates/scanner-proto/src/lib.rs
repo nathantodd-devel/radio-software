@@ -93,7 +93,9 @@ pub struct Call {
     /// Names the call in [`ClientMessage::Replay`].
     pub id: u64,
     pub time: String,
-    pub channel: usize,
+    /// Which of the channels being scanned it was on; `None` for a call
+    /// from before the scan was last restarted.
+    pub channel: Option<usize>,
     /// What to show it as: the channel's name, or "Talkgroup 1234".
     pub name: String,
     pub unit: Option<u32>,

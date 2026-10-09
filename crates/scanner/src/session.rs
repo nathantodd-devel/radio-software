@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
 use crate::engine::{self, Config, Controls, Event};
-use crate::plan::Plan;
+use crate::plan::{Kind, Plan};
 use chrono::Local;
 
 const LOG_LEN: usize = 200;
@@ -18,7 +18,15 @@ pub struct Call {
     /// programs.
     pub id: u64,
     pub time: String,
-    pub channel: usize,
+    /// Which of the channels being scanned it was on. `None` for a call
+    /// from before the scan was last restarted, when they may have been
+    /// different ones.
+    pub channel: Option<usize>,
+    /// What to show it as: the channel's name, or "Talkgroup 1234".
+    pub name: String,
+    /// The channel's frequency in MHz or talkgroup, as text.
+    pub label: String,
+    pub description: String,
     /// For P25 calls.
     pub talkgroup: Option<u16>,
     /// The calling radio, for P25 calls that say.
@@ -93,18 +101,59 @@ impl Live {
     }
 }
 
+/// The activity log of scans that have ended, to carry into the next one:
+/// see [`Session::end`] and [`Session::start_after`].
+#[derive(Default)]
+pub struct History {
+    /// Newest first.
+    log: VecDeque<Call>,
+    call_count: u64,
+}
+
+impl History {
+    /// The calls, newest first.
+    pub fn log(&self) -> &VecDeque<Call> {
+        &self.log
+    }
+}
+
 impl Session {
     pub fn start(plan: Plan, config: Config, volume: f32, squelch_db: f32) -> Self {
-        Self::start_with_audio(plan, config, volume, squelch_db, |_| {})
+        Self::start_with_audio(plan, config, volume, squelch_db, History::default(), |_| {})
     }
 
-    /// As [`start`](Self::start), also handing `audio` what is playing as it
-    /// plays: 16 kHz mono, a millisecond at a time, on the engine's thread.
+    /// As [`start`](Self::start), with the activity log carrying on from
+    /// `history`.
+    pub fn start_after(plan: Plan, config: Config, volume: f32, squelch_db: f32, history: History) -> Self {
+        Self::start_with_audio(plan, config, volume, squelch_db, history, |_| {})
+    }
+
+    /// Stop scanning, releasing the receiver, and hand back the activity
+    /// log to start the next scan with.
+    pub fn end(mut self) -> History {
+        self.controls.stop();
+        if let Some(thread) = self.thread.take() {
+            thread.join().ok();
+        }
+        let mut live = self.live.lock().unwrap();
+        let mut log = std::mem::take(&mut live.log);
+        // The next scan's channels are numbered afresh.
+        log.iter_mut().for_each(|call| call.channel = None);
+        History {
+            log,
+            call_count: live.call_count,
+        }
+    }
+
+    /// As [`start_after`](Self::start_after), also handing `audio` what is
+    /// playing as it plays: 16 kHz mono, a millisecond at a time, on the
+    /// engine's thread.
     pub fn start_with_audio(
         plan: Plan,
         config: Config,
         volume: f32,
         squelch_db: f32,
+        history: History,
         mut audio: impl FnMut(&[i16]) + Send + 'static,
     ) -> Self {
         let plan = Arc::new(plan);
@@ -115,6 +164,8 @@ impl Session {
             open: vec![false; n],
             calls: vec![0; n],
             last_heard: vec![None; n],
+            log: history.log,
+            call_count: history.call_count,
             ..Live::default()
         }));
 
@@ -133,11 +184,7 @@ impl Session {
                         Event::Playing(channel) => {
                             live.playing = channel;
                             // A call picked up partway through still counts as played.
-                            if let Some(call) = live
-                                .log
-                                .iter_mut()
-                                .find(|c| Some(c.channel) == channel && c.secs.is_none())
-                            {
+                            if let Some(call) = live.log.iter_mut().find(|c| c.channel == channel && c.secs.is_none()) {
                                 call.played = true;
                             }
                         }
@@ -175,10 +222,22 @@ impl Session {
                             live.last_heard[channel] = Some(time.clone());
                             live.call_count += 1;
                             let id = live.call_count;
+                            let e = &plan.entries[channel];
+                            // A call on a talkgroup that isn't listed goes
+                            // by its number.
+                            let (name, label) = match (&e.kind, talkgroup) {
+                                (Kind::OtherTalkgroups { .. }, Some(tg)) => {
+                                    (format!("Talkgroup {tg}"), format!("TG {tg}"))
+                                }
+                                (_, _) => (e.tag.clone(), e.id()),
+                            };
                             live.log.push_front(Call {
                                 id,
                                 time,
-                                channel,
+                                channel: Some(channel),
+                                name,
+                                label,
+                                description: e.desc.clone(),
                                 talkgroup,
                                 unit,
                                 recording: None,
@@ -195,7 +254,11 @@ impl Session {
                             recording,
                         } => {
                             live.open[channel] = false;
-                            if let Some(call) = live.log.iter_mut().find(|c| c.channel == channel && c.secs.is_none()) {
+                            if let Some(call) = live
+                                .log
+                                .iter_mut()
+                                .find(|c| c.channel == Some(channel) && c.secs.is_none())
+                            {
                                 call.secs = Some(secs);
                                 call.unit = unit.or(call.unit);
                                 call.recording = recording;
@@ -225,5 +288,55 @@ impl Drop for Session {
         if let Some(thread) = self.thread.take() {
             thread.join().ok();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::Source;
+
+    #[test]
+    fn carries_the_log_into_the_next_scan() {
+        let plan = || {
+            Plan::parse("155.0, 114.8, n, Test, A test channel\n", "test", None)
+                .unwrap()
+                .0
+        };
+        // No such receiver, so the scans end at once; the log is what matters.
+        let config = || Config {
+            source: Source::Kind("teapot".into()),
+            audio: false,
+            ..Config::default()
+        };
+        let first = Session::start(plan(), config(), 3.0, 6.0);
+        {
+            let mut live = first.live.lock().unwrap();
+            live.call_count = 7;
+            live.log.push_front(Call {
+                id: 7,
+                time: "12:00:00".into(),
+                channel: Some(0),
+                name: "Test".into(),
+                label: "155.0000".into(),
+                description: "A test channel".into(),
+                talkgroup: None,
+                unit: None,
+                recording: None,
+                snr_db: 20.0,
+                secs: Some(3.0),
+                played: true,
+            });
+        }
+        let history = first.end();
+        assert_eq!(history.log().len(), 1);
+
+        let second = Session::start_after(plan(), config(), 3.0, 6.0, history);
+        let live = second.live.lock().unwrap();
+        // Still there, no longer tied to a channel of this scan, and the
+        // next call will be numbered after it.
+        assert_eq!(live.log[0].name, "Test");
+        assert_eq!(live.log[0].channel, None);
+        assert_eq!(live.call_count, 7);
     }
 }
