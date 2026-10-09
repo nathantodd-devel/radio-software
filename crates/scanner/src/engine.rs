@@ -85,6 +85,24 @@ pub enum ScanMode {
     Channels,
 }
 
+impl ScanMode {
+    const IDS: [(ScanMode, &str); 3] = [
+        (ScanMode::OneBand, "band"),
+        (ScanMode::HopBands, "hop"),
+        (ScanMode::Channels, "channel"),
+    ];
+
+    /// A short name for the mode, for command lines and saved settings.
+    pub fn id(self) -> &'static str {
+        Self::IDS.iter().find(|m| m.0 == self).map_or("", |m| m.1)
+    }
+
+    /// The mode with this [`id`](Self::id).
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::IDS.iter().find(|m| m.1 == id).map(|m| m.0)
+    }
+}
+
 pub struct Config {
     /// Receiver gain, from 0 to 21 (`receiver::GAIN_LEVELS`), which each
     /// driver spreads over its device's range.
@@ -276,6 +294,9 @@ pub enum Event<'a> {
     Playing(Option<usize>),
     /// Carrier level over the noise floor for every channel, in dB.
     Levels(&'a [f32]),
+    /// The next millisecond of what is playing, as 16 kHz mono audio: the
+    /// same samples the speaker gets. Not sent while nothing is playing.
+    Audio(&'a [i16]),
     /// Tuned to band `index` of `count`, covering `lo_hz` to `hi_hz`.
     Band {
         index: usize,
@@ -912,19 +933,18 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
         }
         controls.replaying.store(replay.is_some(), Relaxed);
 
+        // A recording being replayed (already in `pcm`) takes the place of
+        // live audio.
+        let sounding = !controls.muted() && (replay.is_some() || playing.is_some());
+        if let (Some(c), None) = (playing, &replay) {
+            to_pcm(&audio[c], volume, &mut pcm);
+        }
+        if sounding {
+            on_event(Event::Audio(&pcm));
+        }
         if let Some(out) = &mut speaker {
             // Written every block, silence included, to keep the output running.
-            let written = match playing {
-                _ if controls.muted() => out.write(&silence),
-                // A recording being replayed takes the place of live audio.
-                _ if replay.is_some() => out.write(&pcm),
-                Some(c) => {
-                    to_pcm(&audio[c], volume, &mut pcm);
-                    out.write(&pcm)
-                }
-                None => out.write(&silence),
-            };
-            if written.is_err() {
+            if out.write(if sounding { &pcm } else { &silence }).is_err() {
                 break;
             }
         }

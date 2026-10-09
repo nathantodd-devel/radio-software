@@ -6,4 +6,5 @@ pub mod engine;
 pub mod plan;
 pub mod radioreference;
 pub mod session;
+pub mod settings;
 mod wav;

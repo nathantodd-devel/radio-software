@@ -3,6 +3,8 @@ name = "scanner-ui"
 version = "0.2.0"
 edition = "2024"
 license = "AGPL-3.0-only"
+default-run = "scanner-ui"
+
 
 [features]
 # Also run on X11 desktops. Linking it needs libxkbcommon-x11's development

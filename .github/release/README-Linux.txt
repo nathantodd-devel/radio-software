@@ -2,6 +2,8 @@ Airspy Scanner for Linux (x86_64)
 
   scanner-ui   the desktop app (Wayland or X11)
   scanner      the command-line scanner; run `./scanner --help`
+  scanner-web  the scanner as a web page; run it and open
+               http://localhost:1515/ (see `./scanner-web --help`)
 
 Works with an Airspy R2 or Mini, or an RTL-SDR dongle (RTL2832U with an
 R820T2 or R860 tuner, among others). You need, from your distribution, the

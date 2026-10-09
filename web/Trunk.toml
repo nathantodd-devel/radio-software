@@ -1,0 +1,6 @@
+# `trunk build --release` puts the client in dist/, where scanner-web looks
+# for it. scanner-web serves it; trunk's own server isn't used, since it
+# wouldn't have the scanner behind it.
+[build]
+target = "index.html"
+dist = "dist"

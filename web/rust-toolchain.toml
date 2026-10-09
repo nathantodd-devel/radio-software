@@ -1,0 +1,7 @@
+# GPUI's web backend runs on several threads, which WebAssembly only allows
+# with a rebuilt standard library, and that needs nightly.
+[toolchain]
+# A dated nightly, so the build is the same from one day to the next.
+channel = "nightly-2026-10-08"
+targets = ["wasm32-unknown-unknown"]
+components = ["rust-src", "rustfmt"]

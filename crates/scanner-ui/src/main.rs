@@ -7,7 +7,6 @@ mod editor;
 mod theme;
 
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::time::Duration;
 
 use gpui::{
@@ -16,9 +15,10 @@ use gpui::{
     WindowBounds, WindowDecorations, WindowOptions, div, prelude::*, px, relative, rgb, size,
 };
 use scanner::db::{Db, System};
-use scanner::engine::{self, Config, Radio, ScanMode, Source};
+use scanner::engine::{self, Config, Radio, ScanMode};
 use scanner::plan::{Kind, Plan};
 use scanner::session::{self, Live, Session};
+use scanner::settings::{AUTO_DEVICE, Settings};
 use theme::theme;
 
 /// Signal level that fills a channel's meter, in dB over the noise floor.
@@ -42,34 +42,7 @@ const DETAIL_MIN_WIDTH: f32 = 950.;
 const RESIZE_BORDER: f32 = 5.;
 const RESIZE_CORNER: f32 = 14.;
 
-/// Choices that are remembered in the channel database between runs.
-struct Settings {
-    volume: f32,
-    squelch_db: f32,
-    /// Which kind of receiver to use: a driver's id, or "auto".
-    device: String,
-    /// Receiver gain, 0-21.
-    gain: u8,
-    /// Frequency correction for an RTL-SDR, in parts per million.
-    ppm: i32,
-    /// Power an antenna amplifier through the coax.
-    bias_tee: bool,
-    /// How the channels are covered; saved as one of `SCAN_MODES`' names.
-    scan: ScanMode,
-    /// Sample rate, or 0 for the fastest the receiver offers.
-    sample_rate: u32,
-    /// Seconds on a quiet band before moving on.
-    dwell_secs: f32,
-    /// Longest turn, in seconds, for a band that stays busy.
-    max_stay_secs: f32,
-    /// Keep recordings after the app closes.
-    save_recordings: bool,
-    /// Name of the colour theme: a file in the themes directory, or the
-    /// built-in one.
-    theme: String,
-}
-
-/// The scan modes: what each is saved as, called, and does.
+/// The scan modes: what each is known as (see `ScanMode::id`), called, and does.
 const SCAN_MODES: [(ScanMode, &str, &str, &str); 3] = [
     (
         ScanMode::OneBand,
@@ -92,72 +65,6 @@ const SCAN_MODES: [(ScanMode, &str, &str, &str); 3] = [
          slow to notice traffic, and trunked P25 systems work poorly this way.",
     ),
 ];
-
-/// The receiver setting that means "whichever is found first".
-const AUTO_DEVICE: &str = "auto";
-
-impl Settings {
-    /// The receiver to look for.
-    fn source(&self) -> Source {
-        match self.device.as_str() {
-            AUTO_DEVICE => Source::Auto,
-            id => Source::Kind(id.to_string()),
-        }
-    }
-
-    fn load(db: Option<&Db>) -> Self {
-        fn get<T: FromStr>(db: Option<&Db>, key: &str, default: T) -> T {
-            db.and_then(|db| db.setting(key))
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(default)
-        }
-        let defaults = Config::default();
-        Self {
-            volume: get(db, "volume", 3.0),
-            squelch_db: get(db, "squelch_db", 6.0),
-            device: get(db, "device", AUTO_DEVICE.to_string()),
-            gain: get(db, "gain", defaults.gain),
-            ppm: get(db, "ppm", 0),
-            bias_tee: get(db, "bias_tee", false),
-            scan: SCAN_MODES
-                .iter()
-                .find(|mode| db.and_then(|db| db.setting("scan_mode")).as_deref() == Some(mode.1))
-                .map_or(defaults.scan, |mode| mode.0),
-            sample_rate: get(db, "sample_rate", 0),
-            dwell_secs: get(db, "dwell_secs", defaults.dwell_secs),
-            max_stay_secs: get(db, "max_stay_secs", defaults.max_stay_secs),
-            save_recordings: get(db, "save_recordings", false),
-            theme: get(db, "theme", theme::DEFAULT.to_string()),
-        }
-    }
-
-    fn save(&self, db: &Db) {
-        let values = [
-            ("volume", self.volume.to_string()),
-            ("squelch_db", self.squelch_db.to_string()),
-            ("device", self.device.clone()),
-            ("gain", self.gain.to_string()),
-            ("ppm", self.ppm.to_string()),
-            ("bias_tee", self.bias_tee.to_string()),
-            (
-                "scan_mode",
-                SCAN_MODES
-                    .iter()
-                    .find(|mode| mode.0 == self.scan)
-                    .map_or("", |mode| mode.1)
-                    .to_string(),
-            ),
-            ("sample_rate", self.sample_rate.to_string()),
-            ("dwell_secs", self.dwell_secs.to_string()),
-            ("max_stay_secs", self.max_stay_secs.to_string()),
-            ("save_recordings", self.save_recordings.to_string()),
-            ("theme", self.theme.clone()),
-        ];
-        for (key, value) in values {
-            db.set_setting(key, &value).ok();
-        }
-    }
-}
 
 /// Where recordings that are kept go: beside the channel database.
 fn kept_recordings_dir() -> PathBuf {
@@ -267,12 +174,7 @@ impl ScannerView {
         }
         view.find_receiver();
         // Pick up where the last run left off, or with the first system.
-        let saved = view
-            .db
-            .as_ref()
-            .and_then(|db| db.setting("selected"))
-            .unwrap_or_default();
-        view.selected = saved.split(',').filter_map(|id| id.parse().ok()).collect();
+        view.selected = view.settings.selected.clone();
         view.reload_systems();
         if view.selected.is_empty() {
             view.selected = view.systems.first().map(|s| s.id).into_iter().collect();
@@ -412,17 +314,16 @@ impl ScannerView {
         self.start();
     }
 
-    fn remember_selection(&self) {
-        if let Some(db) = &self.db {
-            let ids: Vec<String> = self.selected.iter().map(i64::to_string).collect();
-            db.set_setting("selected", &ids.join(",")).ok();
-        }
+    fn remember_selection(&mut self) {
+        self.update_settings(false, |_| {});
     }
 
     /// Change settings, remember them, and restart the scan if `restart`
     /// (for the ones the receiver only reads when it starts).
     fn update_settings(&mut self, restart: bool, change: impl FnOnce(&mut Settings)) {
         change(&mut self.settings);
+        // The selection is saved with the settings.
+        self.settings.selected = self.selected.clone();
         if let Some(db) = &self.db {
             self.settings.save(db);
         }

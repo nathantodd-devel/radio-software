@@ -117,12 +117,9 @@ fn parse_args() -> Options {
             "--stdin" => o.config.source = Source::Stdin,
             "--no-audio" => o.config.audio = false,
             "--scan" => {
-                o.config.scan = match value().as_str() {
-                    "hop" => ScanMode::HopBands,
-                    "band" => ScanMode::OneBand,
-                    "channel" => ScanMode::Channels,
-                    other => die(format!("--scan takes hop, band or channel, not {other:?}")),
-                }
+                let mode = value();
+                o.config.scan = ScanMode::from_id(&mode)
+                    .unwrap_or_else(|| die(format!("--scan takes hop, band or channel, not {mode:?}")));
             }
             "--dwell" => o.config.dwell_secs = num(&a, value()),
             "--stay" => o.config.max_stay_secs = num(&a, value()),

@@ -1,0 +1,53 @@
+# The scanner's browser client: a GPUI app compiled to WebAssembly, served by
+# scanner-web. A project of its own rather than a member of the top-level
+# workspace: it needs a nightly toolchain and a newer GPUI than the desktop
+# app's (the revision the Android app also uses).
+[package]
+name = "scanner-web-client"
+version = "0.2.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+publish = false
+
+[[bin]]
+name = "scanner-web-client"
+path = "src/main.rs"
+
+[dependencies]
+gpui = { git = "https://github.com/zed-industries/zed", rev = "5688167d224b5eca54875d49afb8bfd73a07915a", package = "gpui", default-features = false }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "5688167d224b5eca54875d49afb8bfd73a07915a", package = "gpui_platform" }
+# The messages exchanged with the server.
+scanner-proto = { path = "../crates/scanner-proto" }
+futures = "0.3"
+serde_json = "1"
+# Exactly the versions Zed builds GPUI's web backend against: with newer
+# ones it fails as it starts ("closure invoked recursively or after being
+# dropped").
+js-sys = "=0.3.90"
+wasm-bindgen = "=0.2.113"
+wasm-bindgen-futures = "=0.4.63"
+web-sys = { version = "=0.3.90", features = [
+    "AudioBuffer",
+    "AudioBufferSourceNode",
+    "AudioContext",
+    "AudioContextOptions",
+    "AudioDestinationNode",
+    "AudioNode",
+    "AudioScheduledSourceNode",
+    "BaseAudioContext",
+    "BinaryType",
+    "Location",
+    "MessageEvent",
+    "WebSocket",
+    "Window",
+] }
+
+# GPUI needs the fork of async-task that Zed uses.
+[patch.crates-io]
+async-task = { git = "https://github.com/smol-rs/async-task.git", rev = "b4486cd71e4e94fbda54ce6302444de14f4d190e" }
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 1
+panic = "abort"

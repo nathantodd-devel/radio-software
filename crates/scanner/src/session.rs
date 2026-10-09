@@ -14,6 +14,9 @@ const LOG_LEN: usize = 200;
 
 /// One transmission in the activity log.
 pub struct Call {
+    /// Counts up from 1 through the session; names the call to other
+    /// programs.
+    pub id: u64,
     pub time: String,
     pub channel: usize,
     /// For P25 calls.
@@ -40,6 +43,8 @@ pub struct Live {
     pub band: Option<(usize, usize, f64, f64)>,
     /// Newest first.
     pub log: VecDeque<Call>,
+    /// How many calls there have been.
+    pub call_count: u64,
     /// Why the engine stopped, if it did so on its own.
     pub error: Option<String>,
 }
@@ -53,6 +58,18 @@ pub struct Session {
 
 impl Session {
     pub fn start(plan: Plan, config: Config, volume: f32, squelch_db: f32) -> Self {
+        Self::start_with_audio(plan, config, volume, squelch_db, |_| {})
+    }
+
+    /// As [`start`](Self::start), also handing `audio` what is playing as it
+    /// plays: 16 kHz mono, a millisecond at a time, on the engine's thread.
+    pub fn start_with_audio(
+        plan: Plan,
+        config: Config,
+        volume: f32,
+        squelch_db: f32,
+        mut audio: impl FnMut(&[i16]) + Send + 'static,
+    ) -> Self {
         let plan = Arc::new(plan);
         let n = plan.entries.len();
         let controls = Arc::new(Controls::new(&plan, volume, squelch_db));
@@ -68,9 +85,14 @@ impl Session {
             let (plan, controls, live) = (plan.clone(), controls.clone(), live.clone());
             move || {
                 let result = engine::run(&plan, &config, &controls, |event| {
+                    // Not worth the lock: this one comes a thousand times a second.
+                    if let Event::Audio(pcm) = event {
+                        return audio(pcm);
+                    }
                     let mut live = live.lock().unwrap();
                     match event {
                         Event::Levels(levels) => live.levels.copy_from_slice(levels),
+                        Event::Audio(_) => {}
                         Event::Playing(channel) => {
                             live.playing = channel;
                             // A call picked up partway through still counts as played.
@@ -99,7 +121,10 @@ impl Session {
                             live.open[channel] = true;
                             live.calls[channel] += 1;
                             live.last_heard[channel] = Some(time.clone());
+                            live.call_count += 1;
+                            let id = live.call_count;
                             live.log.push_front(Call {
+                                id,
                                 time,
                                 channel,
                                 talkgroup,

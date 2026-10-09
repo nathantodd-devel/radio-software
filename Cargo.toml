@@ -1,5 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/drivers/airspy", "crates/drivers/audio", "crates/drivers/receiver", "crates/drivers/rtlsdr", "crates/radiocore", "crates/scanner", "crates/scanner-ui"]
+members = ["crates/drivers/airspy", "crates/drivers/audio", "crates/drivers/receiver", "crates/drivers/rtlsdr", "crates/radiocore", "crates/scanner", "crates/scanner-proto", "crates/scanner-ui", "crates/scanner-web"]
 # The Android app and the library it is built on are projects of their own.
-exclude = ["mobile", "gpui-mobile"]
+exclude = ["mobile", "gpui-mobile", "web"]
+default-run = "scanner-ui"

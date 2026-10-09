@@ -2,6 +2,8 @@ Airspy Scanner for Windows (64-bit)
 
   scanner-ui.exe   the desktop app
   scanner.exe      the command-line scanner; run `scanner --help` in a terminal
+  scanner-web.exe  the scanner as a web page; run it and open
+                   http://localhost:1515/ (see `scanner-web --help`)
 
 Works with an Airspy R2 or Mini, or an RTL-SDR dongle (RTL2832U with an
 R820T2 or R860 tuner, among others).

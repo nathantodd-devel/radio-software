@@ -11,6 +11,9 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # The bundler for the browser client. Pinned by checksum.
+  TRUNK_URL: https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz
+  TRUNK_SHA256: f2b4680cd239693a646a2795e4633c625328d7b2a044fbe749fa3a2fe9e7036b
 
 jobs:
   check:
@@ -46,3 +49,34 @@ jobs:
       # None of the tests need a radio attached.
       - name: Test
         run: cargo test --workspace --locked
+
+  # The browser client is a project of its own (web/): GPUI compiled to
+  # WebAssembly, which needs a nightly toolchain.
+  web:
+    name: Browser client
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The nightly toolchain named in web/rust-toolchain.toml.
+      - name: Install the toolchain
+        working-directory: web
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Install trunk
+        run: |
+          curl -fsSL -o trunk.tar.gz "$TRUNK_URL"
+          echo "$TRUNK_SHA256  trunk.tar.gz" | sha256sum -c -
+          tar -xzf trunk.tar.gz -C "$HOME/.cargo/bin" trunk
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: web
+
+      - name: Format
+        working-directory: web
+        run: cargo fmt --check
+
+      - name: Build
+        working-directory: web
+        run: trunk build --locked

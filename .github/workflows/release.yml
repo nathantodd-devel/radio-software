@@ -18,10 +18,48 @@ env:
   # Likewise librtlsdr, from the RTL-SDR Blog's build.
   RTLSDR_WIN_URL: https://github.com/rtlsdrblog/rtl-sdr-blog/releases/download/V1.4.0/Release.zip
   RTLSDR_WIN_SHA256: 7ef33f1304647f65e5e0fde43637a73d54f076e91e651a3cecc4f55a17fd9815
+  # The bundler for the browser client. Pinned by checksum.
+  TRUNK_URL: https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz
+  TRUNK_SHA256: f2b4680cd239693a646a2795e4633c625328d7b2a044fbe749fa3a2fe9e7036b
 
 jobs:
+  # The browser client (web/) is the same on every platform, so it is built
+  # once and put in each package beside scanner-web, which serves it.
+  web:
+    name: browser client
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The nightly toolchain named in web/rust-toolchain.toml.
+      - name: Install the toolchain
+        working-directory: web
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Install trunk
+        run: |
+          curl -fsSL -o trunk.tar.gz "$TRUNK_URL"
+          echo "$TRUNK_SHA256  trunk.tar.gz" | sha256sum -c -
+          tar -xzf trunk.tar.gz -C "$HOME/.cargo/bin" trunk
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: web
+          key: release
+
+      - name: Build
+        working-directory: web
+        run: trunk build --release --locked
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-client
+          path: web/dist
+          if-no-files-found: error
+
   build:
     name: ${{ matrix.name }}
+    needs: web
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -58,7 +96,7 @@ jobs:
         run: |
           # Linux releases run on both Wayland and X11 desktops.
           if [ "$RUNNER_OS" = Linux ]; then features="--features scanner-ui/x11"; fi
-          cargo build --release --locked -p scanner -p scanner-ui $features
+          cargo build --release --locked -p scanner -p scanner-ui -p scanner-web $features
 
       - name: Stage files
         run: |
@@ -66,8 +104,14 @@ jobs:
           echo "PACKAGE=$name" >> "$GITHUB_ENV"
           mkdir -p "dist/$name"
           ext=""; [ "$RUNNER_OS" = Windows ] && ext=".exe"
-          cp "target/release/scanner$ext" "target/release/scanner-ui$ext" "dist/$name/"
+          cp "target/release/scanner$ext" "target/release/scanner-ui$ext" "target/release/scanner-web$ext" "dist/$name/"
           cp .github/release/README-${{ runner.os }}.txt "dist/$name/README.txt"
+
+      # scanner-web serves the `web` folder beside it.
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-client
+          path: dist/${{ env.PACKAGE }}/web
 
       # Everything the programs need that Windows itself doesn't provide:
       # libairspy with the libusb and pthreads libraries it uses, the Visual
@@ -194,8 +238,10 @@ jobs:
     permissions:
       contents: write
     steps:
+      # The packages only: the browser client is already inside them.
       - uses: actions/download-artifact@v4
         with:
+          pattern: airspy-scanner-*
           path: dist
           merge-multiple: true
 
