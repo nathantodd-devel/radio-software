@@ -2,6 +2,7 @@
 name = "audio"
 version = "0.2.0"
 edition = "2024"
+license = "AGPL-3.0-only"
 description = "Plays a stream of mono 16-bit audio on the default output device"
 
 # Linux plays through `aplay`, which needs no development packages to build.

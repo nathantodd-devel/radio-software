@@ -2,6 +2,7 @@
 name = "scanner"
 version = "0.2.0"
 edition = "2024"
+license = "AGPL-3.0-only"
 
 [dependencies]
 airspy = { path = "../drivers/airspy" , version = "0.2.0" }
