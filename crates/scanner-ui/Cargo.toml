@@ -1,6 +1,6 @@
 [package]
 name = "scanner-ui"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 license = "AGPL-3.0-only"
 default-run = "scanner-ui"
@@ -12,7 +12,7 @@ default-run = "scanner-ui"
 x11 = ["gpui/x11"]
 
 [dependencies]
-scanner = { path = "../scanner" , version = "0.2.0" }
+scanner = { path = "../scanner" , version = "0.3.0" }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 serde_json = "1"
 

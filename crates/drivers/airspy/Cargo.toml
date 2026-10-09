@@ -1,12 +1,12 @@
 [package]
 name = "airspy"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 license = "AGPL-3.0-only"
 description = "Safe interface to Airspy R2/Mini receivers through libairspy"
 
 [dependencies]
-receiver = { path = "../receiver", version = "0.2.0" }
+receiver = { path = "../receiver", version = "0.3.0" }
 
 # On desktops the system's libairspy is loaded at run time.
 [target.'cfg(not(target_os = "android"))'.dependencies]

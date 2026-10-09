@@ -16,7 +16,7 @@ android {
         targetSdk = 34
         // A release build passes these in (-PversionCode=…, -PversionName=…).
         versionCode = (findProperty("versionCode") as String?)?.toInt() ?: 1
-        versionName = (findProperty("versionName") as String?) ?: "0.2.0"
+        versionName = (findProperty("versionName") as String?) ?: "0.3.0"
 
         // Tell NativeActivity which .so to load.
         // This must match the library name in mobile/Cargo.toml.

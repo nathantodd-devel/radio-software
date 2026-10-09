@@ -1,6 +1,6 @@
 [package]
 name = "scanner-proto"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 license = "AGPL-3.0-only"
 description = "The messages the scanner's web server and its browser client exchange"
