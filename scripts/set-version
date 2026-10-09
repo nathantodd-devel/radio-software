@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""Set the project's version everywhere it is written down.
+
+    scripts/set-version 0.4.0
+
+Changes the version of every crate in the workspace, of the Android app
+(mobile/) and of the browser client (web/); the versions the crates ask of
+each other; the three lockfiles; and the Android app's default version name.
+Nothing is committed or tagged.
+"""
+
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+# Cargo projects with a lockfile of their own, and where their crates are.
+PROJECTS = {".": "crates/**/Cargo.toml", "mobile": "Cargo.toml", "web": "Cargo.toml"}
+GRADLE = ROOT / "mobile/android/gradle/app/build.gradle.kts"
+
+changed = []
+
+
+def rewrite(path, edit):
+    """Run `edit` over a file's text and write it back if that changed it."""
+    old = path.read_text()
+    new = edit(old)
+    if new != old:
+        path.write_text(new)
+        changed.append(path.relative_to(ROOT))
+
+
+def main():
+    if len(sys.argv) != 2 or not re.fullmatch(r"\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?", sys.argv[1]):
+        sys.exit("usage: scripts/set-version VERSION    (for example 0.4.0)")
+    version = sys.argv[1]
+
+    manifests = [m for base, crates in PROJECTS.items() for m in sorted((ROOT / base).glob(crates))]
+    # Vendored code keeps its own versions.
+    manifests = [m for m in manifests if "vendor" not in m.parts and "target" not in m.parts]
+    names = set()
+    for manifest in manifests:
+        package = re.search(r'^\[package\]\n(?:.*\n)*?name = "([^"]+)"', manifest.read_text(), re.M)
+        if not package:
+            sys.exit(f"{manifest}: no package name found")
+        names.add(package.group(1))
+
+    def set_manifest(text):
+        # The package's own version: the first one after [package].
+        text = re.sub(r'(^\[package\]\n(?:.*\n)*?version = ")[^"]+(")', rf"\g<1>{version}\g<2>", text, count=1, flags=re.M)
+        # The versions asked of the project's other crates, which are the
+        # dependencies given by path.
+        def dependency(line):
+            name = line.group(1)
+            if name in names and "path" in line.group(0):
+                return re.sub(r'(version = ")[^"]+(")', rf"\g<1>{version}\g<2>", line.group(0))
+            return line.group(0)
+        return re.sub(r"^([A-Za-z0-9_-]+) = \{.*\}$", dependency, text, flags=re.M)
+
+    def set_lock(text):
+        # Our crates are the entries with no `source`: they come from here.
+        def entry(block):
+            name = re.search(r'^name = "([^"]+)"', block.group(0), re.M).group(1)
+            if name in names and "\nsource = " not in block.group(0):
+                return re.sub(r'(^version = ")[^"]+(")', rf"\g<1>{version}\g<2>", block.group(0), count=1, flags=re.M)
+            return block.group(0)
+        return re.sub(r"^\[\[package\]\]\n(?:.+\n)*", entry, text, flags=re.M)
+
+    for manifest in manifests:
+        rewrite(manifest, set_manifest)
+    for base in PROJECTS:
+        rewrite(ROOT / base / "Cargo.lock", set_lock)
+    rewrite(GRADLE, lambda text: re.sub(r'(\?: ")[^"]+(")(?=\s*$)', rf"\g<1>{version}\g<2>", text, flags=re.M))
+
+    if changed:
+        print(f"Set version {version} in:")
+        for path in changed:
+            print(f"  {path}")
+    else:
+        print(f"Everything is already at {version}.")
+
+
+if __name__ == "__main__":
+    main()

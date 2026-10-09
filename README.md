@@ -375,6 +375,8 @@ Things to know:
 - `web/Cargo.toml` pins `wasm-bindgen` and its companions to the versions GPUI is built with,
   and `web/rust-toolchain.toml` pins the nightly. `web/src/main.rs` works around the GPUI
   revision in use dropping the application as soon as it starts in a browser.
+- `scripts/set-version 0.4.0` sets the version everywhere: every crate, the Android app and the
+  browser client, their lockfiles, and the Android version name.
 - Pushing a tag like `v0.3.0` runs the release workflow, which builds Linux, Windows, macOS
   and Android packages and publishes a GitHub release.
 
