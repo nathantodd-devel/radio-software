@@ -35,12 +35,30 @@ const P25_PREBUFFER: usize = 4320;
 /// device starts, and after each change of band.
 const START_SETTLE_SECS: f64 = 0.3;
 const RETUNE_SETTLE_SECS: f64 = 0.1;
+/// Scanning one channel at a time: how long to look at a channel before
+/// deciding nothing is there, and how far off the channel to tune so that it
+/// isn't at the centre of the passband, where the tuner's own leakage lands.
+const CHANNEL_CHECK_SECS: f32 = 0.05;
+const CHANNEL_OFFSET_HZ: f64 = 300_000.0;
 
 pub enum Source {
     /// Receive from the first Airspy found.
     Airspy,
     /// Read 16-bit I/Q from stdin.
     Stdin,
+}
+
+/// How the channels of a plan are covered.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum ScanMode {
+    /// Receive everything at once; refuse a plan too spread out for that.
+    OneBand,
+    /// Receive a whole band at once, and take turns between bands when the
+    /// plan needs more than one.
+    HopBands,
+    /// Listen to one frequency at a time, moving on when it is quiet: slow
+    /// to notice traffic, but light on the computer and the USB link.
+    Channels,
 }
 
 pub struct Config {
@@ -54,14 +72,15 @@ pub struct Config {
     /// to, whether or not everything else is being saved.
     pub record_marked: Option<PathBuf>,
     /// Airspy sample rate; `None` for the fastest the device offers.
+    /// Scanning one channel at a time always uses the slowest.
     pub rate: Option<u32>,
     pub source: Source,
     /// Play audio through the speakers.
     pub audio: bool,
-    /// When the channels are too spread out for one tuning, take turns
-    /// listening to each band rather than refusing to run.
-    pub multiband: bool,
-    /// Seconds to listen to a quiet band before moving to the next.
+    pub scan: ScanMode,
+    /// Seconds to listen to a quiet band before moving to the next; when
+    /// scanning one channel at a time, how long to wait on a signal for the
+    /// channel to open.
     pub dwell_secs: f32,
     /// Seconds after which a band that stays busy is left anyway, between
     /// transmissions, so the other bands get a turn.
@@ -78,7 +97,7 @@ impl Default for Config {
             rate: None,
             source: Source::Airspy,
             audio: true,
-            multiband: false,
+            scan: ScanMode::HopBands,
             dwell_secs: 1.5,
             max_stay_secs: 20.0,
         }
@@ -237,21 +256,38 @@ pub enum Event<'a> {
 /// Sample rate used when the device can't be asked (reading from stdin).
 const DEFAULT_RATE: u32 = 10_000_000;
 
-/// The sample rate `cfg` will run at: the one it names, or the fastest the
-/// attached Airspy offers. The Airspy must not be in use when asking it.
-pub fn sample_rate(cfg: &Config) -> Result<u32, String> {
-    match (cfg.rate, &cfg.source) {
-        (Some(rate), _) => Ok(rate),
-        (None, Source::Stdin) => Ok(DEFAULT_RATE),
-        (None, Source::Airspy) => {
+/// The sample rates to choose from: the ones the attached Airspy offers.
+/// The Airspy must not be in use when asking it.
+pub fn sample_rates(cfg: &Config) -> Result<Vec<u32>, String> {
+    match cfg.source {
+        Source::Stdin => Ok(vec![cfg.rate.unwrap_or(DEFAULT_RATE)]),
+        Source::Airspy => {
             let rates = Airspy::open()
                 .and_then(|device| device.sample_rates())
                 .map_err(|e| e.to_string())?;
-            rates
-                .into_iter()
-                .max()
-                .ok_or("the Airspy offers no sample rates".into())
+            if rates.is_empty() {
+                return Err("the Airspy offers no sample rates".into());
+            }
+            Ok(rates)
         }
+    }
+}
+
+/// The sample rate `cfg` will run at: the slowest on offer when scanning
+/// one channel at a time, otherwise the one it names or the fastest.
+pub fn sample_rate(cfg: &Config) -> Result<u32, String> {
+    let rates = sample_rates(cfg)?;
+    match (cfg.scan, cfg.rate) {
+        (ScanMode::Channels, _) => Ok(rates.into_iter().min().unwrap_or(DEFAULT_RATE)),
+        (_, Some(rate)) if rates.contains(&rate) => Ok(rate),
+        (_, Some(rate)) => {
+            let offered: Vec<String> = rates.iter().map(|r| r.to_string()).collect();
+            Err(format!(
+                "this Airspy has no {rate} samples/s mode; it offers {}",
+                offered.join(", ")
+            ))
+        }
+        (_, None) => Ok(rates.into_iter().max().unwrap_or(DEFAULT_RATE)),
     }
 }
 
@@ -432,19 +468,25 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
     if rate as f64 % (2.0 * BIN_HZ) != 0.0 {
         return Err("sample rate must be a multiple of 1000".into());
     }
-    let layout = plan.bands(usable_span_hz(rate));
-    if layout.len() > 1 && !cfg.multiband {
+    let by_channel = cfg.scan == ScanMode::Channels;
+    // One channel at a time is the same as hopping between bands, with
+    // every frequency a band of its own.
+    let mut layout = plan.bands(if by_channel { 0.0 } else { usable_span_hz(rate) });
+    if by_channel {
+        layout.iter_mut().for_each(|band| band.center_hz += CHANNEL_OFFSET_HZ);
+    }
+    if layout.len() > 1 && cfg.scan == ScanMode::OneBand {
         let (lo, hi, _) = plan.span();
         return Err(format!(
-            "these channels spread over {:.1} MHz and this Airspy covers {:.1} MHz at a time; \
-             turn on multi-band scanning to take turns between {} bands",
+            "these channels spread over {:.1} MHz and the Airspy covers {:.1} MHz at a time at this sample rate; \
+             change the scan mode to hop between the {} bands",
             (hi - lo) / 1e6,
             usable_span_hz(rate) / 1e6,
             layout.len()
         ));
     }
     if layout.len() > 1 && matches!(cfg.source, Source::Stdin) {
-        return Err("multi-band scanning needs an Airspy to retune; stdin carries one band".into());
+        return Err("scanning more than one band needs an Airspy to retune; stdin carries one".into());
     }
 
     let rows = plan.entries.len();
@@ -531,6 +573,7 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
     let hold_blocks = (cfg.hold_secs / block_secs) as u32;
     let dwell_blocks = (cfg.dwell_secs / block_secs) as u32;
     let max_stay_blocks = (cfg.max_stay_secs / block_secs) as u32;
+    let check_blocks = (CHANNEL_CHECK_SECS / block_secs) as u32;
     let mut iq = vec![Complex32::ZERO; hop];
     let mut audio = vec![Vec::with_capacity(audio_len); rows];
     let mut open = vec![false; rows];
@@ -789,9 +832,26 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
             band_idle_blocks = if busy { 0 } else { band_idle_blocks + 1 };
             band_blocks += 1;
             let overstayed = band_blocks >= max_stay_blocks && playing.is_none();
+            // One channel at a time doesn't wait out the dwell on a channel
+            // with nothing on it.
+            let signal = |rx: &Rx| match rx {
+                Rx::Nfm { channel, .. } => channel.signal_present(),
+                Rx::P25(rx) => rx.channel.signal_present(),
+            };
+            let empty = by_channel && !busy && band_blocks >= check_blocks && !bands[tuned].rxs.iter().any(signal);
+            // Bands with only skipped channels on them aren't worth a turn.
+            let wanted = |band: &Band| {
+                band.rxs.iter().any(|rx| match rx {
+                    Rx::Nfm { row, .. } => !controls.skipped(*row),
+                    Rx::P25(rx) => rx.fixed.is_none_or(|(row, _)| !controls.skipped(row)),
+                })
+            };
             let next = match held {
                 Some(band) => band,
-                None if band_idle_blocks >= dwell_blocks || overstayed => (tuned + 1) % bands.len(),
+                None if band_idle_blocks >= dwell_blocks || overstayed || empty => (1..bands.len())
+                    .map(|step| (tuned + step) % bands.len())
+                    .find(|&band| wanted(&bands[band]))
+                    .unwrap_or(tuned),
                 None => tuned,
             };
             if next != tuned {

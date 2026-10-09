@@ -17,7 +17,7 @@ use gpui::{
     WindowBounds, WindowDecorations, WindowOptions, div, prelude::*, px, relative, rgb, size,
 };
 use scanner::db::{Db, System};
-use scanner::engine::{self, Config};
+use scanner::engine::{self, Config, ScanMode};
 use scanner::plan::{Kind, Plan};
 use session::{Live, Session};
 use theme::theme;
@@ -49,9 +49,10 @@ struct Settings {
     squelch_db: f32,
     /// Airspy linearity gain, 0-21.
     gain: u8,
-    /// Take turns between bands when the selected systems don't fit in one
-    /// tuning.
-    multiband: bool,
+    /// How the channels are covered; saved as one of `SCAN_MODES`' names.
+    scan: ScanMode,
+    /// Airspy sample rate, or 0 for the fastest it offers.
+    sample_rate: u32,
     /// Seconds on a quiet band before moving on.
     dwell_secs: f32,
     /// Longest turn, in seconds, for a band that stays busy.
@@ -62,6 +63,30 @@ struct Settings {
     /// built-in one.
     theme: String,
 }
+
+/// The scan modes: what each is saved as, called, and does.
+const SCAN_MODES: [(ScanMode, &str, &str, &str); 3] = [
+    (
+        ScanMode::OneBand,
+        "band",
+        "One band",
+        "Everything selected is received at once. Systems too far apart for that can't be scanned together.",
+    ),
+    (
+        ScanMode::HopBands,
+        "hop",
+        "Hop between bands",
+        "A whole band is received at once. When the selected systems need more than one band, the scanner \
+         takes turns on each, and calls on the others are missed meanwhile.",
+    ),
+    (
+        ScanMode::Channels,
+        "channel",
+        "One channel at a time",
+        "Like a traditional scanner: each channel is checked in turn. Lightest on the computer and USB, but \
+         slow to notice traffic, and trunked P25 systems work poorly this way.",
+    ),
+];
 
 impl Settings {
     fn load(db: Option<&Db>) -> Self {
@@ -75,7 +100,11 @@ impl Settings {
             volume: get(db, "volume", 3.0),
             squelch_db: get(db, "squelch_db", 6.0),
             gain: get(db, "gain", defaults.gain),
-            multiband: get(db, "multiband", false),
+            scan: SCAN_MODES
+                .iter()
+                .find(|mode| db.and_then(|db| db.setting("scan_mode")).as_deref() == Some(mode.1))
+                .map_or(defaults.scan, |mode| mode.0),
+            sample_rate: get(db, "sample_rate", 0),
             dwell_secs: get(db, "dwell_secs", defaults.dwell_secs),
             max_stay_secs: get(db, "max_stay_secs", defaults.max_stay_secs),
             save_recordings: get(db, "save_recordings", false),
@@ -88,7 +117,15 @@ impl Settings {
             ("volume", self.volume.to_string()),
             ("squelch_db", self.squelch_db.to_string()),
             ("gain", self.gain.to_string()),
-            ("multiband", self.multiband.to_string()),
+            (
+                "scan_mode",
+                SCAN_MODES
+                    .iter()
+                    .find(|mode| mode.0 == self.scan)
+                    .map_or("", |mode| mode.1)
+                    .to_string(),
+            ),
+            ("sample_rate", self.sample_rate.to_string()),
             ("dwell_secs", self.dwell_secs.to_string()),
             ("max_stay_secs", self.max_stay_secs.to_string()),
             ("save_recordings", self.save_recordings.to_string()),
@@ -116,8 +153,8 @@ struct ScannerView {
     systems: Vec<System>,
     /// Systems being scanned together, in the order they were picked.
     selected: Vec<i64>,
-    /// The Airspy's sample rate, if one was found at startup.
-    rate: Option<u32>,
+    /// The sample rates the Airspy offers, if one was found at startup.
+    rates: Vec<u32>,
     /// `None` while nothing is selected or the scan couldn't start.
     session: Option<Session>,
     /// What went wrong last, shown until the next action succeeds.
@@ -184,7 +221,7 @@ impl ScannerView {
             db: None,
             systems: Vec::new(),
             selected: Vec::new(),
-            rate: None,
+            rates: Vec::new(),
             session: None,
             error: None,
             notice: None,
@@ -207,8 +244,8 @@ impl ScannerView {
             view.error = Some(e);
         }
         // Asked once, up front: the Airspy can't be queried while in use.
-        match engine::sample_rate(&Config::default()) {
-            Ok(rate) => view.rate = Some(rate),
+        match engine::sample_rates(&Config::default()) {
+            Ok(rates) => view.rates = rates,
             Err(e) => view.error = Some(e),
         }
         // Pick up where the last run left off, or with the first system.
@@ -271,9 +308,9 @@ impl ScannerView {
         match self.plan(&self.selected) {
             Ok(plan) => {
                 let config = Config {
-                    rate: self.rate,
+                    rate: self.rate(),
                     gain: self.settings.gain,
-                    multiband: self.settings.multiband,
+                    scan: self.settings.scan,
                     dwell_secs: self.settings.dwell_secs,
                     max_stay_secs: self.settings.max_stay_secs,
                     // Always recorded, so calls can be replayed from the log;
@@ -287,6 +324,13 @@ impl ScannerView {
             }
             Err(e) => self.error = Some(e),
         }
+    }
+
+    /// The sample rate to run at: the chosen one if this Airspy offers it,
+    /// otherwise its fastest. `None` if no Airspy was found.
+    fn rate(&self) -> Option<u32> {
+        let chosen = self.rates.iter().find(|&&rate| rate == self.settings.sample_rate);
+        chosen.or(self.rates.iter().max()).copied()
     }
 
     /// Where this run's recordings go: beside the channel database if they
@@ -311,9 +355,9 @@ impl ScannerView {
             both.push(id);
             let fits = self.plan(&both).is_ok_and(|plan| {
                 let (lo, hi, _) = plan.span();
-                self.rate.is_some_and(|rate| hi - lo <= engine::usable_span_hz(rate))
+                self.rate().is_some_and(|rate| hi - lo <= engine::usable_span_hz(rate))
             });
-            self.selected = if fits || self.settings.multiband {
+            self.selected = if fits || self.settings.scan != ScanMode::OneBand {
                 both
             } else {
                 vec![id]
@@ -611,6 +655,14 @@ impl ScannerView {
             (None, None, None) => {
                 let (lo, hi, _) = session.plan.span();
                 let detail = match live.band {
+                    // One channel at a time: each "band" is a single frequency.
+                    Some((index, count, lo, hi)) if lo == hi => format!(
+                        "{} channels  ·  frequency {} of {}, {:.4} MHz",
+                        session.plan.entries.len(),
+                        index + 1,
+                        count,
+                        lo / 1e6
+                    ),
                     Some((index, count, lo, hi)) => format!(
                         "{} channels  ·  band {} of {}, {:.1}–{:.1} MHz",
                         session.plan.entries.len(),
@@ -1171,8 +1223,8 @@ impl ScannerView {
 
     fn settings_page(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let s = &self.settings;
-        let (gain, multiband, dwell, stay, save) =
-            (s.gain, s.multiband, s.dwell_secs, s.max_stay_secs, s.save_recordings);
+        let (gain, scan, dwell, stay, save) = (s.gain, s.scan, s.dwell_secs, s.max_stay_secs, s.save_recordings);
+        let rate = self.rate();
         // One setting: its name, what it does, and the control for it.
         let row = |name: &'static str, about: String, control: gpui::AnyElement| {
             div()
@@ -1203,14 +1255,48 @@ impl ScannerView {
                 page.child(div().px_4().py_2().text_sm().text_color(rgb(theme().error)).child(error))
             })
             .child(row(
-                "Multi-band scanning",
-                "Scan systems that are too far apart to receive at once by taking turns on each band. \
-                 Calls on the bands not being listened to at that moment are missed."
-                    .into(),
-                toggle("multiband", multiband)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.update_settings(true, |s| s.multiband = !multiband);
-                        cx.notify();
+                "Scan mode",
+                SCAN_MODES.iter().find(|mode| mode.0 == scan).map_or("", |mode| mode.3).to_string(),
+                div()
+                    .flex()
+                    .flex_none()
+                    .gap_1()
+                    .children(SCAN_MODES.iter().map(|&(mode, saved_as, title, _)| {
+                        button(saved_as, title, mode == scan, theme().accent).on_click(cx.listener(
+                            move |this, _, _, cx| {
+                                this.update_settings(true, |s| s.scan = mode);
+                                cx.notify();
+                            },
+                        ))
+                    }))
+                    .into_any_element(),
+            ))
+            .child(row(
+                "Sample rate",
+                match (rate, scan) {
+                    (None, _) => "No Airspy was found when the app started.".to_string(),
+                    (Some(_), ScanMode::Channels) => {
+                        "Scanning one channel at a time always uses the lowest rate.".to_string()
+                    }
+                    (Some(rate), _) => format!(
+                        "A band about {:.1} MHz wide is received at once. A lower rate is lighter on the \
+                         computer and USB but covers less, so more hopping between bands.",
+                        engine::usable_span_hz(rate) / 1e6
+                    ),
+                },
+                div()
+                    .flex()
+                    .flex_none()
+                    .gap_1()
+                    .when(scan == ScanMode::Channels, |rates| rates.opacity(0.4))
+                    .children(self.rates.iter().enumerate().map(|(i, &offered)| {
+                        let label = format!("{} MSPS", offered as f64 / 1e6);
+                        button(("rate", i), label, Some(offered) == rate, theme().accent).on_click(cx.listener(
+                            move |this, _, _, cx| {
+                                this.update_settings(true, |s| s.sample_rate = offered);
+                                cx.notify();
+                            },
+                        ))
                     }))
                     .into_any_element(),
             ))

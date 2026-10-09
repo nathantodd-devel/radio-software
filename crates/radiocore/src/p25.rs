@@ -39,6 +39,13 @@ const DUID_TDU: u8 = 0x3;
 const DUID_LDU1: u8 = 0x5;
 const DUID_LDU2: u8 = 0xA;
 const DUID_TDULC: u8 = 0xF;
+/// Trunking signalling block: what a control channel sends, continuously.
+const DUID_TSBK: u8 = 0x7;
+/// Samples after a trunking block for which the channel still counts as a
+/// control channel; blocks come every 75 ms or so.
+const CONTROL_HOLD: usize = 14_400;
+/// Carrier level over the noise floor, in dB, that counts as a signal.
+const PRESENT_DB: f32 = 6.0;
 
 /// BCH(63,16,23) generator polynomial of the network ID.
 const NID_GENERATOR: u64 = 0o6331141367235453;
@@ -88,6 +95,8 @@ pub struct P25Channel {
     pending: Vec<i16>,
     in_call: bool,
     since_voice: usize,
+    /// Samples since the last trunking block, if there has been one.
+    since_control: Option<usize>,
 }
 
 /// A frame whose sync has been found and that is waiting for its samples.
@@ -120,12 +129,21 @@ impl P25Channel {
             pending: Vec::new(),
             in_call: false,
             since_voice: 0,
+            since_control: None,
         }
     }
 
     /// Carrier level over the noise floor, in dB.
     pub fn snr_db(&self) -> f32 {
         self.level.snr_db()
+    }
+
+    /// Whether there is something here worth waiting on: a signal that
+    /// could turn out to be voice. A control channel doesn't count, and
+    /// while the noise floor is still being learned the answer is yes.
+    pub fn signal_present(&self) -> bool {
+        let control = self.since_control.is_some_and(|since| since < CONTROL_HOLD);
+        !self.level.floor().is_finite() || (self.level.snr_db() > PRESENT_DB && !control)
     }
 
     /// Forget everything in progress, as after the receiver was tuned away
@@ -135,6 +153,7 @@ impl P25Channel {
         self.phase.clear();
         self.search = 0;
         self.frame = None;
+        self.since_control = None;
         self.end_call(&mut |_| {});
     }
 
@@ -198,6 +217,7 @@ impl P25Channel {
                     self.voice(duid, &bits, &mut sink);
                 }
                 DUID_TDU | DUID_TDULC => self.end_call(&mut sink),
+                DUID_TSBK => self.since_control = Some(0),
                 _ => {}
             }
             // The next frame's sync may sit a sample or two early.
@@ -213,6 +233,9 @@ impl P25Channel {
         }
 
         self.since_voice += iq.len();
+        if let Some(since) = &mut self.since_control {
+            *since += iq.len();
+        }
         if self.in_call && self.since_voice > CALL_TIMEOUT {
             self.end_call(&mut sink);
         }
@@ -288,6 +311,7 @@ impl P25Channel {
 
         self.in_call = true;
         self.since_voice = 0;
+        self.since_control = None;
         if self.clear == Some(false) {
             self.pending.clear();
             return;

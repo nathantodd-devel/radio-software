@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use chrono::Local;
 use scanner::db::Db;
-use scanner::engine::{self, Config, Controls, Event, Source};
+use scanner::engine::{self, Config, Controls, Event, ScanMode, Source};
 use scanner::plan::{Kind, Plan};
 use scanner::radioreference::{self, Credentials, Imported};
 
@@ -20,10 +20,10 @@ usage: scanner [options] SYSTEM...     scan one or more systems
        scanner radioreference county ID    import a county's conventional channels
 
 SYSTEM is a system's number or name (or part of it) from `scanner systems`,
-or the path of a channel file to scan without importing it. Systems scanned
-together must fit in one tuning of the Airspy (about 9 MHz on an Airspy R2),
-unless --multiband is given: then the scanner takes turns on each band,
-staying while there is traffic.
+or the path of a channel file to scan without importing it. The Airspy
+receives a whole band at once (about 9 MHz on an Airspy R2 at its fastest
+rate). When the systems don't fit in one band the scanner takes turns on
+each, staying while there is traffic; see --scan.
 
 `import` reads this program's own CSV format or a RadioReference CSV export:
 a conventional frequency list, or a trunked system's talkgroup list together
@@ -42,10 +42,14 @@ page addresses: radioreference.com/db/sid/ID and .../db/browse/ctid/ID.
       --record-marked DIR
                      save the transmissions of channels marked for recording
                      (the Rec button in scanner-ui), even without --record
-      --rate HZ      Airspy sample rate (default: the fastest it offers)
+      --rate HZ      Airspy sample rate (default: the fastest it offers); a lower
+                     rate covers a narrower band with less load
+      --scan MODE    hop      whole bands at once, taking turns if there are
+                              several (default)
+                     band     whole band at once; refuse if it doesn't fit
+                     channel  one channel at a time, at the lowest rate
       --stdin        read 16-bit I/Q from stdin instead of an Airspy
       --no-audio     don't play audio (useful with --record)
-      --multiband    hop between bands when the systems don't fit in one tuning
       --dwell SECS   time to listen to a quiet band before hopping (default 1.5)
       --stay SECS    longest turn for a band that stays busy (default 20)
       --db FILE      channel database (default: airspy-scanner/channels.db beside
@@ -95,7 +99,14 @@ fn parse_args() -> Options {
             "--rate" => o.config.rate = Some(num(&a, value())),
             "--stdin" => o.config.source = Source::Stdin,
             "--no-audio" => o.config.audio = false,
-            "--multiband" => o.config.multiband = true,
+            "--scan" => {
+                o.config.scan = match value().as_str() {
+                    "hop" => ScanMode::HopBands,
+                    "band" => ScanMode::OneBand,
+                    "channel" => ScanMode::Channels,
+                    other => die(format!("--scan takes hop, band or channel, not {other:?}")),
+                }
+            }
             "--dwell" => o.config.dwell_secs = num(&a, value()),
             "--stay" => o.config.max_stay_secs = num(&a, value()),
             "--db" => o.db = PathBuf::from(value()),
@@ -259,7 +270,12 @@ fn scan(o: &Options, plan: Plan) {
             // Announced once, not on every hop.
             Event::Band { index: 0, count, .. } if count > 1 && !announced => {
                 announced = true;
-                eprintln!("Taking turns between {count} bands.");
+                let what = if o.config.scan == ScanMode::Channels {
+                    "channels"
+                } else {
+                    "bands"
+                };
+                eprintln!("Taking turns between {count} {what}.");
             }
             _ => {}
         }

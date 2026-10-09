@@ -140,6 +140,13 @@ impl NfmChannel {
         self.level.snr_db()
     }
 
+    /// Whether there is something here worth waiting on: a carrier, which
+    /// may or may not turn out to have the right tone. While the noise
+    /// floor is still being learned the answer is yes.
+    pub fn signal_present(&self) -> bool {
+        !self.level.floor().is_finite() || self.carrier
+    }
+
     /// Demodulate one block. Appends `block_len / 3` audio samples (delayed by
     /// `DELAY_MS`) to `audio` and returns whether they belong to an open
     /// transmission. `floor_cap` bounds the noise floor from above so a
@@ -266,7 +273,16 @@ mod tests {
                 })
                 .collect();
             audio.clear();
-            if ch.process(&iq, f32::INFINITY, &mut audio) {
+            let opened = ch.process(&iq, f32::INFINITY, &mut audio);
+            // Present while warming up and whenever keyed, whatever the tone;
+            // not on noise alone (a few blocks of slack either side).
+            match b {
+                0..=150 => assert!(ch.signal_present(), "warming up at block {b}"),
+                300..=990 | 3100.. => assert!(!ch.signal_present(), "noise at block {b}"),
+                1010..=2990 => assert!(ch.signal_present(), "carrier at block {b}"),
+                _ => {}
+            }
+            if opened {
                 open += 1;
                 peak = audio.iter().fold(peak, |m, v| m.max(v.abs()));
             }

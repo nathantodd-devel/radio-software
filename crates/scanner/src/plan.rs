@@ -516,6 +516,18 @@ mod tests {
         // P25 frequencies sit half a bin off the grid; the tuning follows.
         assert_eq!(bands[3].center_hz, 772_756_750.0);
         assert_eq!(plan.bands(400e6).len(), 2);
+
+        // A span of nothing is one channel at a time: only channels on the
+        // very same frequency share a tuning.
+        let text =
+            "154.01, 110.9, n, Tac 16, South\n154.04, 118.8, n, Tac 15, South\n154.01, 118.8, n, Tac 35, North\n";
+        let (plan, _) = Plan::parse(text, "test", None).unwrap();
+        let rows: Vec<Vec<Listener>> = plan
+            .bands(0.0)
+            .iter()
+            .map(|b| b.listeners.iter().map(|l| l.1).collect())
+            .collect();
+        assert_eq!(rows, [vec![Listener::Row(0), Listener::Row(2)], vec![Listener::Row(1)]]);
     }
 
     #[test]
