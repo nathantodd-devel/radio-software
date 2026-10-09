@@ -1,10 +1,11 @@
 # Airspy Scanner
 
-A radio scanner for [Airspy](https://airspy.com) software-defined receivers, written in Rust.
+A radio scanner for [Airspy](https://airspy.com) and RTL-SDR software-defined receivers,
+written in Rust.
 
 Instead of stepping through channels one at a time like a traditional scanner, it receives a
-whole band at once (about 9 MHz on an Airspy R2) and demodulates every channel in it
-simultaneously, so nothing is missed while it is "somewhere else". It decodes analog FM and
+whole band at once (about 9 MHz on an Airspy R2, about 1.9 MHz on an RTL-SDR) and demodulates
+every channel in it simultaneously, so nothing is missed while it is "somewhere else". It decodes analog FM and
 P25 Phase 1 digital voice, and comes as a desktop app and a command-line tool.
 
 It ships with channel lists for San Mateo County, California, and can import any other area.
@@ -37,7 +38,11 @@ It ships with channel lists for San Mateo County, California, and can import any
   need to follow the control channel. Encrypted calls are skipped.
 - **Three scan modes:** receive one band; hop between bands when the selected systems are too
   far apart; or scan one channel at a time at a low sample rate for less CPU and USB load.
-- **Selectable sample rate** (10 or 2.5 MSPS on an Airspy R2).
+- **Two kinds of receiver:** Airspy R2 and Mini, and RTL-SDR dongles (RTL2832U with an R820T2
+  or R860 tuner, and the other tuners librtlsdr supports). The scanner uses an Airspy if one is
+  attached, otherwise an RTL-SDR, or whichever you choose.
+- **Selectable sample rate** (10 or 2.5 MSPS on an Airspy R2; 2.4, 2.048 or 1.024 MSPS on an
+  RTL-SDR).
 - **Per-channel controls:** hold, skip, priority (interrupts other traffic) and record.
 - **Recording and replay.** Every call is recorded; finished calls can be replayed from the
   activity log.
@@ -60,29 +65,36 @@ This is a young project. What has and has not been exercised:
 | Windows and macOS builds | Set up in the release workflow; never built or run |
 | RadioReference API import | Requests verified against the live service; parsing of real replies untested |
 | RadioReference CSV import | Tested only on hand-made samples |
-| Android app | Skeleton only: a placeholder screen, not yet seen running |
+| Android app | Builds and draws on a Pixel 10; receiving with an Airspy attached is untested |
+| RTL-SDR | Driver written and the engine tested at its sample rates with synthetic signals; never run with a real dongle |
 | Airspy Mini | Should work (sample rates are read from the device); untested |
 
-Not supported: P25 Phase 2, DMR, NXDN, DCS (digital squelch codes), and other SDR hardware.
+Not supported: P25 Phase 2, DMR, NXDN, DCS (digital squelch codes), other SDR hardware, and
+RTL-SDR direct sampling (HF).
 
 ## Requirements
 
-- An Airspy R2 or Airspy Mini.
+- An Airspy R2 or Airspy Mini, or an RTL-SDR dongle. An RTL-SDR sees about a fifth as much
+  spectrum at once, so it hops between bands more; an R820T2 or R860 tuner covers roughly
+  24 MHz to 1.76 GHz.
 - An antenna suited to the bands you want. Weak, hissy audio usually means the antenna.
-- **Linux:** `libairspy` and `aplay`.
-  - Fedora: `sudo dnf install airspyone_host alsa-utils`
-  - Debian/Ubuntu: `sudo apt install libairspy0 alsa-utils`
+- **Linux:** `aplay`, and the library for your receiver (`libairspy` or `librtlsdr`).
+  - Fedora: `sudo dnf install alsa-utils airspyone_host rtl-sdr`
+  - Debian/Ubuntu: `sudo apt install alsa-utils libairspy0 rtl-sdr`
 
-  These packages also install the udev rule that lets you use the Airspy without being root.
+  These packages also install the udev rules that let you use the receiver without being
+  root. If an RTL-SDR won't open, the kernel's DVB-T driver may be holding it: blacklist
+  `dvb_usb_rtl28xxu` and plug it in again.
   The desktop app needs Wayland or X11 and a Vulkan-capable GPU.
-- **Windows:** nothing extra; the release zip includes the Airspy libraries.
-- **macOS:** `brew install airspy`.
+- **Windows:** the release zip includes the Airspy and RTL-SDR libraries. An RTL-SDR also
+  needs the WinUSB driver installed once with [Zadig](https://zadig.akeo.ie).
+- **macOS:** `brew install airspy` or `brew install librtlsdr`.
 
 ## Install
 
 Download an archive for your platform from the
 [releases page](https://github.com/nathantodd-devel/radio-software/releases), unpack it, plug in
-the Airspy and run `scanner-ui` (or `scanner` for the command line). Each archive has a
+the receiver and run `scanner-ui` (or `scanner` for the command line). Each archive has a
 `README.txt` with platform notes.
 
 Or [build from source](#building-from-source).
@@ -117,10 +129,13 @@ scanner-ui
 | Setting | What it does |
 |---|---|
 | Scan mode | *One band*, *Hop between bands* (default) or *One channel at a time*. |
-| Sample rate | One of the rates your Airspy offers. Lower covers less spectrum with less load. |
+| Receiver | *Automatic* (an Airspy if there is one, otherwise an RTL-SDR), *Airspy* or *RTL-SDR*. |
+| Sample rate | One of the rates your receiver offers. Lower covers less spectrum with less load. |
 | Time on a quiet band | How long to wait on a band with no traffic before moving on. |
 | Longest turn on a busy band | A band with constant traffic is left after this long so others get a turn. |
-| Receiver gain | Airspy gain, 0 to 21. |
+| Receiver gain | 0 to 21: the Airspy's linearity gain, or that far up an RTL-SDR tuner's range. |
+| Frequency correction | For RTL-SDR dongles whose crystal is off, in parts per million. |
+| Bias tee | Powers an amplifier at the antenna through the coax. Leave off unless you have one. |
 | Keep recordings | On: recordings are kept. Off: deleted when the app closes (except channels marked Rec). |
 | Theme | Colours for the app. |
 
@@ -140,10 +155,13 @@ Useful options:
 
 | Option | Meaning |
 |---|---|
-| `-g`, `--gain N` | Airspy linearity gain, 0-21 (default 17) |
+| `--device auto\|airspy\|rtlsdr` | Which receiver to use (default `auto`) |
+| `-g`, `--gain N` | Receiver gain, 0-21 (default 17) |
+| `--ppm N` | Frequency correction for an RTL-SDR, in parts per million |
+| `--bias-tee` | Power an antenna amplifier through the coax |
 | `-s`, `--squelch DB` | Carrier level over the noise floor needed to open (default 6) |
 | `--scan hop\|band\|channel` | Scan mode (default `hop`) |
-| `--rate HZ` | Sample rate, e.g. `2500000` (default: the fastest the device offers) |
+| `--rate HZ` | Sample rate, e.g. `2500000` (default: the fastest the receiver offers) |
 | `--record DIR` | Save every transmission as a WAV file |
 | `--record-marked DIR` | Save only channels marked Rec in the app |
 | `--no-audio` | Don't play audio |
@@ -279,9 +297,19 @@ Things to know:
 
 ## Android
 
-`mobile/` holds the beginnings of an Android app, built on
-[gpui-mobile](https://github.com/itsbalamurali/gpui-mobile). Today it is a skeleton that shows
-a placeholder screen; the scanner is not wired in.
+`mobile/` holds an Android app built on
+[gpui-mobile](https://github.com/itsbalamurali/gpui-mobile). It uses the same engine and
+channel database as the desktop app, with a phone layout: what is playing at the top, and
+tabs for Channels, Activity, Systems and Settings.
+
+The Airspy plugs into the phone with a USB OTG adapter. Android asks whether the app may use
+it; after that the app opens it through Android's USB manager. An Airspy draws more power than
+some phones supply, so a powered hub may be needed. The app defaults to the lowest sample rate
+to go easy on the battery.
+
+Status: it builds, starts and draws correctly on a Pixel 10. Receiving has not been tested on
+a phone yet. Systems can be selected but not added or edited on the phone; the database starts
+with the same San Mateo County systems as the desktop.
 
 It is a separate cargo project and expects a clone of gpui-mobile beside it:
 
@@ -293,11 +321,21 @@ cargo install cargo-ndk          # and install the Android NDK via Android Studi
 cd mobile
 cargo ndk -t arm64-v8a -t x86_64 -P 26 -o android/gradle/app/src/main/jniLibs build
 cd android/gradle && ./gradlew assembleDebug
+adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Known issue: on the Android emulator with hardware graphics the app stays on its splash
-screen, because the renderer rejects the emulator's Vulkan driver. Use a real phone, or try
-the emulator's software graphics mode.
+Known issues:
+
+- **The Android emulator doesn't work.** The renderer rejects the emulator's Vulkan driver as
+  non-compliant and its OpenGL fallback fails, in both hardware and software graphics modes,
+  so the app stays on its splash screen. Use a real phone.
+- **Debug assertions must stay off** (they are, in `mobile/Cargo.toml`). With them on, wgpu
+  adds debug information to its shaders, which crashes the shader compiler in some phones'
+  GPU drivers (seen on a Pixel 10).
+
+On Android the Airspy library is compiled into the app from
+[`crates/drivers/airspy/vendor/libairspy`](crates/drivers/airspy/vendor/libairspy), a copy of
+upstream libairspy 1.0.12.
 
 ## Project layout
 
@@ -306,14 +344,16 @@ the emulator's software graphics mode.
 | `crates/radiocore` | DSP: wideband channelizer, FM demodulator with tone squelch, P25 Phase 1 decoder |
 | `crates/scanner` | The engine (receive loop, scheduling, recording), channel database, importers, and the `scanner` CLI |
 | `crates/scanner-ui` | The desktop app, built with [GPUI](https://www.gpui.rs) |
-| `crates/drivers/airspy` | Airspy access through the system's `libairspy`, loaded at run time |
+| `crates/drivers/airspy` | Airspy access through `libairspy`: the system's, loaded at run time, or a compiled-in copy on Android |
+| `crates/drivers/rtlsdr` | RTL-SDR access through the system's `librtlsdr`, loaded at run time |
 | `crates/drivers/audio` | Audio output: `aplay` on Linux, the native audio API elsewhere |
-| `mobile` | Android app skeleton (separate cargo project) |
+| `mobile` | The Android app (separate cargo project) |
 | `.github/workflows` | CI, Android CI and the release build |
 
 ## How it works
 
-1. The Airspy is tuned to the middle of a band and streams complex samples at 10 MSPS.
+1. The receiver is tuned to the middle of a band and streams complex samples (10 MSPS from an
+   Airspy R2, 2.4 MSPS from an RTL-SDR).
 2. A channelizer takes one large FFT per millisecond and, for each channel, inverse-transforms
    just the bins around it. That yields a 48 kHz stream per channel for the cost of a single
    forward FFT, however many channels there are.
@@ -354,5 +394,6 @@ Parts that come from elsewhere keep their own licences, all compatible with the 
   [gpui-mobile](https://github.com/itsbalamurali/gpui-mobile), which is offered under
   GPL-3.0-or-later, AGPL-3.0-or-later or Apache-2.0.
 - The Windows release bundles `airspy.dll` (BSD 3-clause), `libusb-1.0.dll` and
-  `pthreadVC2.dll` (LGPL 2.1), and Microsoft's Visual C++ 2010 runtime.
+  `pthreadVC2.dll` (LGPL 2.1), `rtlsdr.dll` (GPL 2.0 or later), and Microsoft's Visual C++
+  runtimes.
 - Rust dependencies are under their own licences, mostly MIT or Apache-2.0; GPUI is Apache-2.0.

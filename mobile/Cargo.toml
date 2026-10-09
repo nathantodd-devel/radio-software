@@ -26,10 +26,14 @@ gpui-mobile = { path = "../gpui-mobile" }
 # Must be the same revision gpui-mobile builds against.
 gpui = { git = "https://github.com/zed-industries/zed", rev = "5688167d224b5eca54875d49afb8bfd73a07915a", package = "gpui", default-features = false }
 log = "0.4"
+# The scanner itself: engine, channel database and importers.
+scanner = { path = "../crates/scanner" }
 
 [target.'cfg(target_os = "android")'.dependencies]
 android_logger = "0.15"
 android-activity = { version = "0.6", features = ["native-activity"] }
+# Same version as gpui-mobile, whose helpers hand out its types.
+jni = "0.22"
 
 # gpui-mobile needs the fork of async-task that Zed uses.
 [patch.crates-io]
@@ -37,8 +41,13 @@ async-task = { git = "https://github.com/smol-rs/async-task.git", rev = "b4486cd
 
 # Without debug info the debug library is tens of megabytes, not hundreds;
 # panics still name the function they came from.
+#
+# Debug assertions are off because wgpu, when they are on, adds debug
+# information to its shaders, and the shader compiler in some phones' GPU
+# drivers (PowerVR, as in the Pixel 10) aborts on it.
 [profile.dev]
 debug = false
+debug-assertions = false
 
 [profile.release]
 opt-level = "z"

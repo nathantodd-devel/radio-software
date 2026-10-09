@@ -1,14 +1,14 @@
 //! One run of the scanner engine on a background thread, and the live state
-//! it publishes for the window to draw.
+//! it publishes for a front end to draw.
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
+use crate::engine::{self, Config, Controls, Event};
+use crate::plan::Plan;
 use chrono::Local;
-use scanner::engine::{self, Config, Controls, Event};
-use scanner::plan::Plan;
 
 const LOG_LEN: usize = 200;
 

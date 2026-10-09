@@ -1,4 +1,4 @@
-//! The receive loop: Airspy samples in, speaker audio, recordings and
+//! The receive loop: samples in from an Airspy or RTL-SDR, speaker audio, recordings and
 //! [`Event`]s out. Blocking; front ends run it on a thread of its own and
 //! steer it through [`Controls`].
 
@@ -13,6 +13,7 @@ use std::sync::mpsc::Receiver;
 use airspy::Airspy;
 use chrono::Local;
 use radiocore::{Channelizer, Complex32, NfmChannel, NfmConfig, P25Channel, P25Frame};
+use rtlsdr::RtlSdr;
 
 use crate::plan::{BIN_HZ, Entry, Kind, Listener, Plan};
 use crate::wav;
@@ -21,8 +22,12 @@ const CHANNEL_BINS: usize = 96; // 48 kHz per channel
 const CHANNEL_RATE: f32 = 48_000.0;
 const AUDIO_RATE: u32 = 16_000;
 const IF_CUTOFF_HZ: f64 = 9_000.0;
-/// Fraction of the sample rate the Airspy's filters pass cleanly.
-const USABLE_BANDWIDTH: f64 = 0.9;
+/// Fraction of the sample rate each receiver's filters pass cleanly. An
+/// RTL-SDR's roll off sooner towards the edges.
+const AIRSPY_USABLE_BANDWIDTH: f64 = 0.9;
+const RTLSDR_USABLE_BANDWIDTH: f64 = 0.8;
+/// The top of the gain scale in [`Config::gain`].
+const GAIN_LEVELS: u8 = 21;
 /// Blocks (milliseconds) between [`Event::Levels`] reports.
 const LEVEL_BLOCKS: u64 = 100;
 /// Decoded P25 speech as audio; at this scale it sits about level with the
@@ -42,8 +47,16 @@ const CHANNEL_CHECK_SECS: f32 = 0.05;
 const CHANNEL_OFFSET_HZ: f64 = 300_000.0;
 
 pub enum Source {
+    /// Receive from the first Airspy found or, failing that, the first
+    /// RTL-SDR.
+    Auto,
     /// Receive from the first Airspy found.
     Airspy,
+    /// Receive from the first RTL-SDR found.
+    RtlSdr,
+    /// Receive from an Airspy the operating system has opened for us, by the
+    /// file descriptor of that connection (Android).
+    AirspyFd(i32),
     /// Read 16-bit I/Q from stdin.
     Stdin,
 }
@@ -62,8 +75,14 @@ pub enum ScanMode {
 }
 
 pub struct Config {
-    /// Airspy linearity gain, 0-21.
+    /// Receiver gain, 0-21: the Airspy's linearity gain, or that far up
+    /// an RTL-SDR tuner's range of gains.
     pub gain: u8,
+    /// Correction for an RTL-SDR's crystal, in parts per million. An Airspy
+    /// is accurate enough not to need one.
+    pub ppm: i32,
+    /// Power an amplifier at the antenna through the coax.
+    pub bias_tee: bool,
     /// Seconds to stay on a channel after it goes quiet.
     pub hold_secs: f32,
     /// Directory to save every transmission to, as WAV files.
@@ -71,7 +90,7 @@ pub struct Config {
     /// Directory to save the transmissions of channels marked for recording
     /// to, whether or not everything else is being saved.
     pub record_marked: Option<PathBuf>,
-    /// Airspy sample rate; `None` for the fastest the device offers.
+    /// Sample rate; `None` for the fastest the device offers.
     /// Scanning one channel at a time always uses the slowest.
     pub rate: Option<u32>,
     pub source: Source,
@@ -91,11 +110,13 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             gain: 17,
+            ppm: 0,
+            bias_tee: false,
             hold_secs: 1.5,
             record: None,
             record_marked: None,
             rate: None,
-            source: Source::Airspy,
+            source: Source::Auto,
             audio: true,
             scan: ScanMode::HopBands,
             dwell_secs: 1.5,
@@ -256,52 +277,179 @@ pub enum Event<'a> {
 /// Sample rate used when the device can't be asked (reading from stdin).
 const DEFAULT_RATE: u32 = 10_000_000;
 
-/// The sample rates to choose from: the ones the attached Airspy offers.
-/// The Airspy must not be in use when asking it.
-pub fn sample_rates(cfg: &Config) -> Result<Vec<u32>, String> {
-    match cfg.source {
-        Source::Stdin => Ok(vec![cfg.rate.unwrap_or(DEFAULT_RATE)]),
-        Source::Airspy => {
-            let rates = Airspy::open()
-                .and_then(|device| device.sample_rates())
-                .map_err(|e| e.to_string())?;
-            if rates.is_empty() {
-                return Err("the Airspy offers no sample rates".into());
-            }
-            Ok(rates)
+/// A receiver that was found, and what it can do.
+#[derive(Clone)]
+pub struct Radio {
+    pub name: String,
+    /// The sample rates it offers.
+    pub rates: Vec<u32>,
+    usable_bandwidth: f64,
+}
+
+impl Radio {
+    /// Widest spread of frequencies, in Hz, one tuning can cover at `rate`.
+    pub fn usable_span_hz(&self, rate: u32) -> f64 {
+        rate as f64 * self.usable_bandwidth
+    }
+}
+
+/// An open receiver of either kind.
+enum Device {
+    Airspy(Airspy),
+    RtlSdr(RtlSdr),
+}
+
+/// The samples coming from a [`Device`].
+enum Blocks {
+    Airspy(Receiver<airspy::Block>),
+    RtlSdr(Receiver<rtlsdr::Block>),
+}
+
+impl Blocks {
+    /// The next block of interleaved 16-bit I/Q, or `None` once the device
+    /// has stopped.
+    fn recv(&self) -> Option<Vec<i16>> {
+        match self {
+            Blocks::Airspy(blocks) => blocks.recv().ok().map(|b| b.iq),
+            Blocks::RtlSdr(blocks) => blocks.recv().ok().map(|b| b.iq),
+        }
+    }
+
+    /// Throw away whatever is waiting.
+    fn drain(&self) {
+        match self {
+            Blocks::Airspy(blocks) => while blocks.try_recv().is_ok() {},
+            Blocks::RtlSdr(blocks) => while blocks.try_recv().is_ok() {},
         }
     }
 }
 
-/// The sample rate `cfg` will run at: the slowest on offer when scanning
-/// one channel at a time, otherwise the one it names or the fastest.
-pub fn sample_rate(cfg: &Config) -> Result<u32, String> {
-    let rates = sample_rates(cfg)?;
+impl Device {
+    fn open(source: &Source) -> Result<Self, String> {
+        match source {
+            Source::Airspy => Airspy::open().map(Device::Airspy).map_err(|e| e.to_string()),
+            Source::AirspyFd(fd) => Airspy::open_fd(*fd).map(Device::Airspy).map_err(|e| e.to_string()),
+            Source::RtlSdr => RtlSdr::open().map(Device::RtlSdr).map_err(|e| e.to_string()),
+            Source::Auto => Airspy::open().map(Device::Airspy).or_else(|airspy| {
+                RtlSdr::open()
+                    .map(Device::RtlSdr)
+                    .map_err(|rtlsdr| format!("no receiver found. Airspy: {airspy}. RTL-SDR: {rtlsdr}"))
+            }),
+            Source::Stdin => Err("stdin is not a device".into()),
+        }
+    }
+
+    fn describe(&self) -> Result<Radio, String> {
+        let (name, rates, usable_bandwidth) = match self {
+            Device::Airspy(device) => (
+                "Airspy".to_string(),
+                device.sample_rates().map_err(|e| e.to_string())?,
+                AIRSPY_USABLE_BANDWIDTH,
+            ),
+            Device::RtlSdr(device) => (
+                device.name().to_string(),
+                device.sample_rates(),
+                RTLSDR_USABLE_BANDWIDTH,
+            ),
+        };
+        if rates.is_empty() {
+            return Err(format!("the {name} offers no sample rates"));
+        }
+        Ok(Radio {
+            name,
+            rates,
+            usable_bandwidth,
+        })
+    }
+
+    /// Set the device up as `cfg` asks and start it receiving.
+    fn start(&mut self, rate: u32, cfg: &Config) -> Result<Blocks, String> {
+        match self {
+            Device::Airspy(device) => (|| {
+                device.set_sample_rate(rate)?;
+                device.set_linearity_gain(cfg.gain)?;
+                if cfg.bias_tee {
+                    device.set_bias_tee(true)?;
+                }
+                device.start().map(Blocks::Airspy)
+            })()
+            .map_err(|e: airspy::Error| e.to_string()),
+            Device::RtlSdr(device) => (|| {
+                device.set_sample_rate(rate)?;
+                device.set_frequency_correction(cfg.ppm)?;
+                device.set_gain_level(cfg.gain, GAIN_LEVELS)?;
+                if cfg.bias_tee {
+                    device.set_bias_tee(true)?;
+                }
+                device.start().map(Blocks::RtlSdr)
+            })()
+            .map_err(|e: rtlsdr::Error| e.to_string()),
+        }
+    }
+
+    fn set_frequency(&mut self, hz: u32) -> Result<(), String> {
+        match self {
+            Device::Airspy(device) => device.set_frequency(hz).map_err(|e| e.to_string()),
+            Device::RtlSdr(device) => device.set_frequency(hz).map_err(|e| e.to_string()),
+        }
+    }
+}
+
+/// Find the receiver `cfg` asks for and say what it can do. The receiver
+/// must not be in use when asking.
+pub fn probe(cfg: &Config) -> Result<Radio, String> {
+    match cfg.source {
+        Source::Stdin => Ok(Radio {
+            name: "stdin".into(),
+            rates: vec![cfg.rate.unwrap_or(DEFAULT_RATE)],
+            usable_bandwidth: AIRSPY_USABLE_BANDWIDTH,
+        }),
+        _ => Device::open(&cfg.source)?.describe(),
+    }
+}
+
+/// The sample rates to choose from: the ones the receiver offers.
+pub fn sample_rates(cfg: &Config) -> Result<Vec<u32>, String> {
+    Ok(probe(cfg)?.rates)
+}
+
+/// The sample rate to run at, of those on offer: the slowest when scanning
+/// one channel at a time, otherwise the one `cfg` names or the fastest.
+fn choose_rate(cfg: &Config, radio: &Radio) -> Result<u32, String> {
+    let rates = &radio.rates;
     match (cfg.scan, cfg.rate) {
-        (ScanMode::Channels, _) => Ok(rates.into_iter().min().unwrap_or(DEFAULT_RATE)),
+        (ScanMode::Channels, _) => Ok(rates.iter().copied().min().unwrap_or(DEFAULT_RATE)),
         (_, Some(rate)) if rates.contains(&rate) => Ok(rate),
         (_, Some(rate)) => {
             let offered: Vec<String> = rates.iter().map(|r| r.to_string()).collect();
             Err(format!(
-                "this Airspy has no {rate} samples/s mode; it offers {}",
+                "the {} has no {rate} samples/s mode; it offers {}",
+                radio.name,
                 offered.join(", ")
             ))
         }
-        (_, None) => Ok(rates.into_iter().max().unwrap_or(DEFAULT_RATE)),
+        (_, None) => Ok(rates.iter().copied().max().unwrap_or(DEFAULT_RATE)),
     }
 }
 
-/// Widest spread of frequencies, in Hz, one tuning can cover at `rate`.
+/// The sample rate `cfg` will run at.
+pub fn sample_rate(cfg: &Config) -> Result<u32, String> {
+    choose_rate(cfg, &probe(cfg)?)
+}
+
+/// Widest spread of frequencies, in Hz, one tuning of an Airspy can cover
+/// at `rate`. For whichever receiver is attached, see
+/// [`Radio::usable_span_hz`].
 pub fn usable_span_hz(rate: u32) -> f64 {
-    rate as f64 * USABLE_BANDWIDTH
+    rate as f64 * AIRSPY_USABLE_BANDWIDTH
 }
 
 /// Where the samples come from.
 enum Input {
     Stdin(BufReader<io::StdinLock<'static>>, Vec<u8>),
-    Airspy {
-        device: Airspy,
-        blocks: Receiver<airspy::Block>,
+    Radio {
+        device: Device,
+        blocks: Blocks,
         /// Samples received but not yet handed on.
         queue: VecDeque<i16>,
         rate: u32,
@@ -310,33 +458,28 @@ enum Input {
 
 impl Input {
     fn open(center_hz: f64, rate: u32, cfg: &Config) -> Result<Self, String> {
-        match cfg.source {
-            Source::Stdin => Ok(Input::Stdin(
+        if let Source::Stdin = cfg.source {
+            return Ok(Input::Stdin(
                 BufReader::with_capacity(1 << 20, io::stdin().lock()),
                 Vec::new(),
-            )),
-            Source::Airspy => (|| {
-                let mut device = Airspy::open()?;
-                device.set_sample_rate(rate)?;
-                device.set_linearity_gain(cfg.gain)?;
-                let blocks = device.start()?;
-                let mut input = Input::Airspy {
-                    device,
-                    blocks,
-                    queue: VecDeque::new(),
-                    rate,
-                };
-                input.tune(center_hz, START_SETTLE_SECS)?;
-                Ok(input)
-            })()
-            .map_err(|e: airspy::Error| e.to_string()),
+            ));
         }
+        let mut device = Device::open(&cfg.source)?;
+        let blocks = device.start(rate, cfg)?;
+        let mut input = Input::Radio {
+            device,
+            blocks,
+            queue: VecDeque::new(),
+            rate,
+        };
+        input.tune(center_hz, START_SETTLE_SECS)?;
+        Ok(input)
     }
 
     /// Change frequency, dropping what was received before and while the
     /// tuner settles.
-    fn tune(&mut self, center_hz: f64, settle_secs: f64) -> Result<(), airspy::Error> {
-        if let Input::Airspy {
+    fn tune(&mut self, center_hz: f64, settle_secs: f64) -> Result<(), String> {
+        if let Input::Radio {
             device,
             blocks,
             queue,
@@ -345,11 +488,11 @@ impl Input {
         {
             device.set_frequency(center_hz.round() as u32)?;
             queue.clear();
-            while blocks.try_recv().is_ok() {}
+            blocks.drain();
             let mut settling = (*rate as f64 * settle_secs) as usize;
             while settling > 0 {
-                let Ok(block) = blocks.recv() else { break };
-                settling = settling.saturating_sub(block.iq.len() / 2);
+                let Some(block) = blocks.recv() else { break };
+                settling = settling.saturating_sub(block.len() / 2);
             }
         }
         Ok(())
@@ -368,10 +511,10 @@ impl Input {
                     *s = sample(i16::from_le_bytes([b[0], b[1]]), i16::from_le_bytes([b[2], b[3]]));
                 }
             }
-            Input::Airspy { blocks, queue, .. } => {
+            Input::Radio { blocks, queue, .. } => {
                 while queue.len() < iq.len() * 2 {
-                    let Ok(block) = blocks.recv() else { return false };
-                    queue.extend(block.iq);
+                    let Some(block) = blocks.recv() else { return false };
+                    queue.extend(block);
                 }
                 for s in iq.iter_mut() {
                     *s = sample(queue.pop_front().unwrap(), queue.pop_front().unwrap());
@@ -464,29 +607,32 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
     if plan.frequencies().next().is_none() {
         return Err("nothing to scan: no channels selected".into());
     }
-    let rate = sample_rate(cfg)?;
+    let radio = probe(cfg)?;
+    let rate = choose_rate(cfg, &radio)?;
+    let usable_span = radio.usable_span_hz(rate);
     if rate as f64 % (2.0 * BIN_HZ) != 0.0 {
         return Err("sample rate must be a multiple of 1000".into());
     }
     let by_channel = cfg.scan == ScanMode::Channels;
     // One channel at a time is the same as hopping between bands, with
     // every frequency a band of its own.
-    let mut layout = plan.bands(if by_channel { 0.0 } else { usable_span_hz(rate) });
+    let mut layout = plan.bands(if by_channel { 0.0 } else { usable_span });
     if by_channel {
         layout.iter_mut().for_each(|band| band.center_hz += CHANNEL_OFFSET_HZ);
     }
     if layout.len() > 1 && cfg.scan == ScanMode::OneBand {
         let (lo, hi, _) = plan.span();
         return Err(format!(
-            "these channels spread over {:.1} MHz and the Airspy covers {:.1} MHz at a time at this sample rate; \
+            "these channels spread over {:.1} MHz and the {} covers {:.1} MHz at a time at this sample rate; \
              change the scan mode to hop between the {} bands",
             (hi - lo) / 1e6,
-            usable_span_hz(rate) / 1e6,
+            radio.name,
+            usable_span / 1e6,
             layout.len()
         ));
     }
     if layout.len() > 1 && matches!(cfg.source, Source::Stdin) {
-        return Err("scanning more than one band needs an Airspy to retune; stdin carries one".into());
+        return Err("scanning more than one band needs a receiver to retune; stdin carries one".into());
     }
 
     let rows = plan.entries.len();
@@ -878,7 +1024,7 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
                 band_idle_blocks = 0;
                 band_blocks = 0;
                 if let Err(e) = input.tune(bands[tuned].center_hz, RETUNE_SETTLE_SECS) {
-                    failure = Some(e.to_string());
+                    failure = Some(e);
                     break;
                 }
                 announce(tuned, &bands, &mut on_event);
@@ -893,8 +1039,8 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
     if let Some(failure) = failure {
         return Err(failure);
     }
-    if matches!(input, Input::Airspy { .. }) && !controls.stop.load(Relaxed) {
-        return Err("the Airspy stopped sending samples (unplugged?)".into());
+    if matches!(input, Input::Radio { .. }) && !controls.stop.load(Relaxed) {
+        return Err(format!("the {} stopped sending samples (unplugged?)", radio.name));
     }
     Ok(())
 }

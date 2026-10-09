@@ -4,7 +4,6 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod editor;
-mod session;
 mod theme;
 
 use std::path::{Path, PathBuf};
@@ -17,9 +16,9 @@ use gpui::{
     WindowBounds, WindowDecorations, WindowOptions, div, prelude::*, px, relative, rgb, size,
 };
 use scanner::db::{Db, System};
-use scanner::engine::{self, Config, ScanMode};
+use scanner::engine::{self, Config, Radio, ScanMode, Source};
 use scanner::plan::{Kind, Plan};
-use session::{Live, Session};
+use scanner::session::{self, Live, Session};
 use theme::theme;
 
 /// Signal level that fills a channel's meter, in dB over the noise floor.
@@ -47,11 +46,17 @@ const RESIZE_CORNER: f32 = 14.;
 struct Settings {
     volume: f32,
     squelch_db: f32,
-    /// Airspy linearity gain, 0-21.
+    /// Which kind of receiver to use; one of `DEVICES`' names.
+    device: String,
+    /// Receiver gain, 0-21.
     gain: u8,
+    /// Frequency correction for an RTL-SDR, in parts per million.
+    ppm: i32,
+    /// Power an antenna amplifier through the coax.
+    bias_tee: bool,
     /// How the channels are covered; saved as one of `SCAN_MODES`' names.
     scan: ScanMode,
-    /// Airspy sample rate, or 0 for the fastest it offers.
+    /// Sample rate, or 0 for the fastest the receiver offers.
     sample_rate: u32,
     /// Seconds on a quiet band before moving on.
     dwell_secs: f32,
@@ -88,7 +93,19 @@ const SCAN_MODES: [(ScanMode, &str, &str, &str); 3] = [
     ),
 ];
 
+/// The kinds of receiver: what each is saved as and called.
+const DEVICES: [(&str, &str); 3] = [("auto", "Automatic"), ("airspy", "Airspy"), ("rtlsdr", "RTL-SDR")];
+
 impl Settings {
+    /// The receiver to look for.
+    fn source(&self) -> Source {
+        match self.device.as_str() {
+            "airspy" => Source::Airspy,
+            "rtlsdr" => Source::RtlSdr,
+            _ => Source::Auto,
+        }
+    }
+
     fn load(db: Option<&Db>) -> Self {
         fn get<T: FromStr>(db: Option<&Db>, key: &str, default: T) -> T {
             db.and_then(|db| db.setting(key))
@@ -99,7 +116,10 @@ impl Settings {
         Self {
             volume: get(db, "volume", 3.0),
             squelch_db: get(db, "squelch_db", 6.0),
+            device: get(db, "device", DEVICES[0].0.to_string()),
             gain: get(db, "gain", defaults.gain),
+            ppm: get(db, "ppm", 0),
+            bias_tee: get(db, "bias_tee", false),
             scan: SCAN_MODES
                 .iter()
                 .find(|mode| db.and_then(|db| db.setting("scan_mode")).as_deref() == Some(mode.1))
@@ -116,7 +136,10 @@ impl Settings {
         let values = [
             ("volume", self.volume.to_string()),
             ("squelch_db", self.squelch_db.to_string()),
+            ("device", self.device.clone()),
             ("gain", self.gain.to_string()),
+            ("ppm", self.ppm.to_string()),
+            ("bias_tee", self.bias_tee.to_string()),
             (
                 "scan_mode",
                 SCAN_MODES
@@ -153,8 +176,8 @@ struct ScannerView {
     systems: Vec<System>,
     /// Systems being scanned together, in the order they were picked.
     selected: Vec<i64>,
-    /// The sample rates the Airspy offers, if one was found at startup.
-    rates: Vec<u32>,
+    /// The receiver that was found when last looked for, and what it can do.
+    radio: Option<Radio>,
     /// `None` while nothing is selected or the scan couldn't start.
     session: Option<Session>,
     /// What went wrong last, shown until the next action succeeds.
@@ -221,7 +244,7 @@ impl ScannerView {
             db: None,
             systems: Vec::new(),
             selected: Vec::new(),
-            rates: Vec::new(),
+            radio: None,
             session: None,
             error: None,
             notice: None,
@@ -243,11 +266,7 @@ impl ScannerView {
         if let Err(e) = theme::select(&view.settings.theme) {
             view.error = Some(e);
         }
-        // Asked once, up front: the Airspy can't be queried while in use.
-        match engine::sample_rates(&Config::default()) {
-            Ok(rates) => view.rates = rates,
-            Err(e) => view.error = Some(e),
-        }
+        view.find_receiver();
         // Pick up where the last run left off, or with the first system.
         let saved = view
             .db
@@ -272,7 +291,7 @@ impl ScannerView {
             }
         })
         .detach();
-        // The engine owns the Airspy and the audio player; shut it down
+        // The engine owns the receiver and the audio player; shut it down
         // before the process goes away.
         cx.on_app_quit(|this, _| {
             this.session = None;
@@ -298,8 +317,25 @@ impl ScannerView {
     }
 
     /// Scan the selected systems.
+    /// Look for the kind of receiver the settings ask for. It can't be
+    /// asked what it offers while it is in use, so this stops any scan.
+    fn find_receiver(&mut self) {
+        self.session = None;
+        let source = Config {
+            source: self.settings.source(),
+            ..Config::default()
+        };
+        match engine::probe(&source) {
+            Ok(radio) => self.radio = Some(radio),
+            Err(e) => {
+                self.radio = None;
+                self.error = Some(e);
+            }
+        }
+    }
+
     fn start(&mut self) {
-        // Only one receiver can hold the Airspy: stop the old one first.
+        // Only one scan can hold the receiver: stop the old one first.
         self.session = None;
         self.error = None;
         if self.selected.is_empty() {
@@ -308,8 +344,11 @@ impl ScannerView {
         match self.plan(&self.selected) {
             Ok(plan) => {
                 let config = Config {
+                    source: self.settings.source(),
                     rate: self.rate(),
                     gain: self.settings.gain,
+                    ppm: self.settings.ppm,
+                    bias_tee: self.settings.bias_tee,
                     scan: self.settings.scan,
                     dwell_secs: self.settings.dwell_secs,
                     max_stay_secs: self.settings.max_stay_secs,
@@ -326,11 +365,18 @@ impl ScannerView {
         }
     }
 
-    /// The sample rate to run at: the chosen one if this Airspy offers it,
-    /// otherwise its fastest. `None` if no Airspy was found.
+    /// The sample rate to run at: the chosen one if the receiver offers it,
+    /// otherwise its fastest. `None` if no receiver was found.
     fn rate(&self) -> Option<u32> {
-        let chosen = self.rates.iter().find(|&&rate| rate == self.settings.sample_rate);
-        chosen.or(self.rates.iter().max()).copied()
+        let rates = &self.radio.as_ref()?.rates;
+        let chosen = rates.iter().find(|&&rate| rate == self.settings.sample_rate);
+        chosen.or(rates.iter().max()).copied()
+    }
+
+    /// Widest spread of frequencies, in Hz, the receiver covers in one
+    /// tuning at the rate in use.
+    fn usable_span_hz(&self) -> Option<f64> {
+        Some(self.radio.as_ref()?.usable_span_hz(self.rate()?))
     }
 
     /// Where this run's recordings go: beside the channel database if they
@@ -355,7 +401,7 @@ impl ScannerView {
             both.push(id);
             let fits = self.plan(&both).is_ok_and(|plan| {
                 let (lo, hi, _) = plan.span();
-                self.rate().is_some_and(|rate| hi - lo <= engine::usable_span_hz(rate))
+                self.usable_span_hz().is_some_and(|span| hi - lo <= span)
             });
             self.selected = if fits || self.settings.scan != ScanMode::OneBand {
                 both
@@ -1224,6 +1270,7 @@ impl ScannerView {
     fn settings_page(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let s = &self.settings;
         let (gain, scan, dwell, stay, save) = (s.gain, s.scan, s.dwell_secs, s.max_stay_secs, s.save_recordings);
+        let (device, ppm, bias_tee) = (s.device.clone(), s.ppm, s.bias_tee);
         let rate = self.rate();
         // One setting: its name, what it does, and the control for it.
         let row = |name: &'static str, about: String, control: gpui::AnyElement| {
@@ -1252,11 +1299,47 @@ impl ScannerView {
             .overflow_y_scroll()
             .child(section_title("Settings"))
             .when_some(self.error.clone(), |page, error| {
-                page.child(div().px_4().py_2().text_sm().text_color(rgb(theme().error)).child(error))
+                page.child(
+                    div()
+                        .px_4()
+                        .py_2()
+                        .text_sm()
+                        .text_color(rgb(theme().error))
+                        .child(error),
+                )
             })
             .child(row(
+                "Receiver",
+                match &self.radio {
+                    Some(radio) => format!("Using: {}.", radio.name),
+                    None => "None found. Plug one in, then choose its kind here to look again.".to_string(),
+                },
+                div()
+                    .flex()
+                    .flex_none()
+                    .gap_1()
+                    .children(DEVICES.iter().map(|&(saved_as, title)| {
+                        button(saved_as, title, saved_as == device, theme().accent).on_click(cx.listener(
+                            move |this, _, _, cx| {
+                                this.update_settings(false, |s| s.device = saved_as.to_string());
+                                this.error = None;
+                                this.find_receiver();
+                                if this.radio.is_some() {
+                                    this.start();
+                                }
+                                cx.notify();
+                            },
+                        ))
+                    }))
+                    .into_any_element(),
+            ))
+            .child(row(
                 "Scan mode",
-                SCAN_MODES.iter().find(|mode| mode.0 == scan).map_or("", |mode| mode.3).to_string(),
+                SCAN_MODES
+                    .iter()
+                    .find(|mode| mode.0 == scan)
+                    .map_or("", |mode| mode.3)
+                    .to_string(),
                 div()
                     .flex()
                     .flex_none()
@@ -1274,14 +1357,14 @@ impl ScannerView {
             .child(row(
                 "Sample rate",
                 match (rate, scan) {
-                    (None, _) => "No Airspy was found when the app started.".to_string(),
+                    (None, _) => "No receiver was found.".to_string(),
                     (Some(_), ScanMode::Channels) => {
                         "Scanning one channel at a time always uses the lowest rate.".to_string()
                     }
-                    (Some(rate), _) => format!(
+                    (Some(_), _) => format!(
                         "A band about {:.1} MHz wide is received at once. A lower rate is lighter on the \
                          computer and USB but covers less, so more hopping between bands.",
-                        engine::usable_span_hz(rate) / 1e6
+                        self.usable_span_hz().unwrap_or(0.0) / 1e6
                     ),
                 },
                 div()
@@ -1289,15 +1372,21 @@ impl ScannerView {
                     .flex_none()
                     .gap_1()
                     .when(scan == ScanMode::Channels, |rates| rates.opacity(0.4))
-                    .children(self.rates.iter().enumerate().map(|(i, &offered)| {
-                        let label = format!("{} MSPS", offered as f64 / 1e6);
-                        button(("rate", i), label, Some(offered) == rate, theme().accent).on_click(cx.listener(
-                            move |this, _, _, cx| {
-                                this.update_settings(true, |s| s.sample_rate = offered);
-                                cx.notify();
-                            },
-                        ))
-                    }))
+                    .children(
+                        self.radio
+                            .iter()
+                            .flat_map(|radio| &radio.rates)
+                            .enumerate()
+                            .map(|(i, &offered)| {
+                                let label = format!("{} MSPS", offered as f64 / 1e6);
+                                button(("rate", i), label, Some(offered) == rate, theme().accent).on_click(cx.listener(
+                                    move |this, _, _, cx| {
+                                        this.update_settings(true, |s| s.sample_rate = offered);
+                                        cx.notify();
+                                    },
+                                ))
+                            }),
+                    )
                     .into_any_element(),
             ))
             .child(row(
@@ -1338,7 +1427,7 @@ impl ScannerView {
             ))
             .child(row(
                 "Receiver gain",
-                "Airspy gain, 0 to 21. Raise it for weak signals; lower it if strong ones cause noise on other channels."
+                "From 0 to 21. Raise it for weak signals; lower it if strong ones cause noise on other channels."
                     .into(),
                 stepper(
                     "",
@@ -1353,6 +1442,37 @@ impl ScannerView {
                     })),
                 )
                 .into_any_element(),
+            ))
+            .child(row(
+                "Frequency correction",
+                "For RTL-SDR dongles whose crystal is off, in parts per million. If channels sound distorted or \
+                 never open, this is the first thing to adjust. An Airspy doesn't need it."
+                    .into(),
+                stepper(
+                    "",
+                    format!("{ppm} ppm"),
+                    button("ppm-down", "−", false, theme().accent).on_click(cx.listener(move |this, _, _, cx| {
+                        this.update_settings(true, |s| s.ppm = (ppm - 1).clamp(-200, 200));
+                        cx.notify();
+                    })),
+                    button("ppm-up", "+", false, theme().accent).on_click(cx.listener(move |this, _, _, cx| {
+                        this.update_settings(true, |s| s.ppm = (ppm + 1).clamp(-200, 200));
+                        cx.notify();
+                    })),
+                )
+                .into_any_element(),
+            ))
+            .child(row(
+                "Bias tee",
+                "Sends power up the antenna cable for an amplifier at the antenna. Leave off unless you have \
+                 one: it can damage antennas that are a DC short."
+                    .into(),
+                toggle("bias-tee", bias_tee)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.update_settings(true, |s| s.bias_tee = !bias_tee);
+                        cx.notify();
+                    }))
+                    .into_any_element(),
             ))
             .child(row(
                 "Keep recordings",

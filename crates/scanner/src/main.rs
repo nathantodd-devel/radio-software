@@ -20,10 +20,10 @@ usage: scanner [options] SYSTEM...     scan one or more systems
        scanner radioreference county ID    import a county's conventional channels
 
 SYSTEM is a system's number or name (or part of it) from `scanner systems`,
-or the path of a channel file to scan without importing it. The Airspy
-receives a whole band at once (about 9 MHz on an Airspy R2 at its fastest
-rate). When the systems don't fit in one band the scanner takes turns on
-each, staying while there is traffic; see --scan.
+or the path of a channel file to scan without importing it. The receiver
+takes in a whole band at once: about 9 MHz on an Airspy R2 at its fastest
+rate, about 1.9 MHz on an RTL-SDR. When the systems don't fit in one band
+the scanner takes turns on each, staying while there is traffic; see --scan.
 
 `import` reads this program's own CSV format or a RadioReference CSV export:
 a conventional frequency list, or a trunked system's talkgroup list together
@@ -34,7 +34,13 @@ account and an application key from RadioReference, given in the environment
 as RR_USERNAME, RR_PASSWORD and RR_APP_KEY. The IDs are the numbers in the
 page addresses: radioreference.com/db/sid/ID and .../db/browse/ctid/ID.
 
-  -g, --gain N       Airspy linearity gain 0-21 (default 17)
+      --device KIND  auto (an Airspy if there is one, otherwise an RTL-SDR; the
+                     default), airspy or rtlsdr
+  -g, --gain N       receiver gain 0-21 (default 17): the Airspy's linearity
+                     gain, or that far up an RTL-SDR tuner's range
+      --ppm N        frequency correction for an RTL-SDR's crystal, in parts
+                     per million (default 0)
+      --bias-tee     power an antenna amplifier through the coax
   -s, --squelch DB   carrier level over the noise floor to open (default 6)
       --hold SECS    stay on a channel this long after it goes quiet (default 1.5)
       --volume X     audio gain (default 3)
@@ -42,13 +48,13 @@ page addresses: radioreference.com/db/sid/ID and .../db/browse/ctid/ID.
       --record-marked DIR
                      save the transmissions of channels marked for recording
                      (the Rec button in scanner-ui), even without --record
-      --rate HZ      Airspy sample rate (default: the fastest it offers); a lower
-                     rate covers a narrower band with less load
+      --rate HZ      sample rate (default: the fastest the receiver offers); a
+                     lower rate covers a narrower band with less load
       --scan MODE    hop      whole bands at once, taking turns if there are
                               several (default)
                      band     whole band at once; refuse if it doesn't fit
                      channel  one channel at a time, at the lowest rate
-      --stdin        read 16-bit I/Q from stdin instead of an Airspy
+      --stdin        read 16-bit I/Q from stdin instead of a receiver
       --no-audio     don't play audio (useful with --record)
       --dwell SECS   time to listen to a quiet band before hopping (default 1.5)
       --stay SECS    longest turn for a band that stays busy (default 20)
@@ -90,7 +96,17 @@ fn parse_args() -> Options {
             v.parse().unwrap_or_else(|_| die(format!("bad value for {flag}: {v}")))
         }
         match a.as_str() {
+            "--device" => {
+                o.config.source = match value().as_str() {
+                    "auto" => Source::Auto,
+                    "airspy" => Source::Airspy,
+                    "rtlsdr" | "rtl-sdr" | "rtl" => Source::RtlSdr,
+                    other => die(format!("--device takes auto, airspy or rtlsdr, not {other:?}")),
+                }
+            }
             "-g" | "--gain" => o.config.gain = num(&a, value()),
+            "--ppm" => o.config.ppm = num(&a, value()),
+            "--bias-tee" => o.config.bias_tee = true,
             "-s" | "--squelch" => o.squelch_db = num(&a, value()),
             "--hold" => o.config.hold_secs = num(&a, value()),
             "--volume" => o.volume = num(&a, value()),
@@ -235,7 +251,7 @@ fn scan(o: &Options, plan: Plan) {
     let (lo, hi, _) = plan.span();
     let controls = Arc::new(Controls::new(&plan, o.volume, o.squelch_db));
     {
-        // Stop cleanly, so the Airspy is released and recordings are closed.
+        // Stop cleanly, so the receiver is released and recordings are closed.
         let controls = controls.clone();
         ctrlc::set_handler(move || controls.stop()).ok();
     }

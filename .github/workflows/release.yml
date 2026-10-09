@@ -15,6 +15,9 @@ env:
   # time. Pinned by checksum.
   AIRSPY_WIN_URL: https://github.com/airspy/airspyone_host/releases/download/v1.0.10/airspy_host_tools_win32_x86_x64_v1_0_10.zip
   AIRSPY_WIN_SHA256: fcf1f0e10a8377a342162d0e7e929c1221b013573f80205544d681e1f9d4a551
+  # Likewise librtlsdr, from the RTL-SDR Blog's build.
+  RTLSDR_WIN_URL: https://github.com/rtlsdrblog/rtl-sdr-blog/releases/download/V1.4.0/Release.zip
+  RTLSDR_WIN_SHA256: 7ef33f1304647f65e5e0fde43637a73d54f076e91e651a3cecc4f55a17fd9815
 
 jobs:
   build:
@@ -67,9 +70,10 @@ jobs:
           cp .github/release/README-${{ runner.os }}.txt "dist/$name/README.txt"
 
       # Everything the programs need that Windows itself doesn't provide:
-      # libairspy with the libusb and pthreads libraries it uses, and the
-      # Visual C++ 2010 runtime that this pthreads build depends on. (The
-      # programs themselves are built with their C runtime linked in; see
+      # libairspy with the libusb and pthreads libraries it uses, the Visual
+      # C++ 2010 runtime that this pthreads build depends on, and librtlsdr
+      # with the Visual C++ 2015+ runtime it depends on. (The programs
+      # themselves are built with their C runtime linked in; see
       # .cargo/config.toml.)
       - name: Bundle libraries (Windows)
         if: runner.os == 'Windows'
@@ -84,6 +88,11 @@ jobs:
             choco install vcredist2010 --yes --no-progress
           fi
           cp "$system32/msvcr100.dll" "dist/$PACKAGE/"
+
+          curl -sSfL -o rtlsdr.zip "$RTLSDR_WIN_URL"
+          echo "$RTLSDR_WIN_SHA256  rtlsdr.zip" | sha256sum --check
+          7z x -y -ortlsdr rtlsdr.zip > /dev/null
+          cp rtlsdr/x64/rtlsdr.dll "$system32/vcruntime140.dll" "dist/$PACKAGE/"
 
       - name: Archive
         run: |

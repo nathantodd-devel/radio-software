@@ -1,8 +1,11 @@
 //! Safe interface to Airspy R2 / Mini receivers.
 //!
-//! This drives the device through libairspy, the vendor's C library, which
-//! is loaded at run time: nothing is needed to build, and a missing library
-//! is an ordinary [`Error`] rather than a failure to start. On Fedora the
+//! This drives the device through libairspy, the vendor's C library. On
+//! desktops it is loaded at run time: nothing is needed to build, and a
+//! missing library is an ordinary [`Error`] rather than a failure to start.
+//! On Android, which has no such library, a copy is compiled in, and the
+//! device is opened with [`Airspy::open_fd`] from a file descriptor that
+//! Android's USB manager provides. On Fedora the
 //! library comes with the `airspyone_host` package, on Debian and Ubuntu
 //! with `libairspy0`, on macOS with Homebrew's `airspy`; on Windows
 //! `airspy.dll` and the libraries it needs go beside the program.
@@ -21,6 +24,8 @@ const INSTALL_HINT: &str = "install airspyone_host (Fedora) or libairspy0 (Debia
 const INSTALL_HINT: &str = "install it with `brew install airspy`";
 #[cfg(target_os = "windows")]
 const INSTALL_HINT: &str = "airspy.dll, libusb-1.0.dll and pthreadVC2.dll belong beside this program";
+#[cfg(target_os = "android")]
+const INSTALL_HINT: &str = "it is part of the app and should always be there";
 
 /// Blocks of samples that may wait for the reader before any are dropped.
 const QUEUE_BLOCKS: usize = 32;
@@ -78,6 +83,26 @@ pub struct Airspy {
 unsafe impl Send for Airspy {}
 
 impl Airspy {
+    /// Open an Airspy the operating system has already opened, by the file
+    /// descriptor of that connection: on Android, what `UsbDeviceConnection`
+    /// gives. The descriptor stays the caller's to close, after this is
+    /// dropped.
+    pub fn open_fd(fd: i32) -> Result<Self> {
+        let lib = Lib::load().map_err(Error::Library)?;
+        let open_fd = lib
+            .open_fd
+            .ok_or_else(|| Error::Library("it is too old to open a device by file descriptor".into()))?;
+        let mut device = std::ptr::null_mut();
+        // SAFETY: `device` is a valid place for the handle to be written.
+        let code = unsafe { open_fd(&mut device, fd) };
+        check(&lib, code)?;
+        Ok(Self {
+            lib,
+            device,
+            stream: None,
+        })
+    }
+
     /// Open the first Airspy found.
     pub fn open() -> Result<Self> {
         let lib = Lib::load().map_err(Error::Library)?;

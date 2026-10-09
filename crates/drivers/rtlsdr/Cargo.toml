@@ -1,0 +1,9 @@
+[package]
+name = "rtlsdr"
+version = "0.2.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+description = "Safe interface to RTL-SDR receivers (RTL2832U with R820T2/R860 and other tuners) through librtlsdr"
+
+[dependencies]
+libloading = "0.8"

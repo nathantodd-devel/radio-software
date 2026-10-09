@@ -2,6 +2,7 @@
 
 use std::ffi::{c_char, c_int, c_void};
 
+#[cfg(not(target_os = "android"))]
 use libloading::Library;
 
 pub const SUCCESS: c_int = 0;
@@ -26,6 +27,9 @@ type Device = *mut c_void;
 
 pub struct Lib {
     pub open: unsafe extern "C" fn(*mut Device) -> c_int,
+    /// Opens a device the operating system has already opened for us, by its
+    /// file descriptor. Only in libairspy 1.0.12 and later.
+    pub open_fd: Option<unsafe extern "C" fn(*mut Device, c_int) -> c_int>,
     pub close: unsafe extern "C" fn(Device) -> c_int,
     pub get_samplerates: unsafe extern "C" fn(Device, *mut u32, u32) -> c_int,
     pub set_samplerate: unsafe extern "C" fn(Device, u32) -> c_int,
@@ -38,9 +42,59 @@ pub struct Lib {
     pub stop_rx: unsafe extern "C" fn(Device) -> c_int,
     pub error_name: unsafe extern "C" fn(c_int) -> *const c_char,
     /// Keeps the functions above loaded.
+    #[cfg(not(target_os = "android"))]
     _library: Library,
 }
 
+/// libairspy as compiled into this crate (see build.rs).
+#[cfg(target_os = "android")]
+mod linked {
+    use super::{BlockCallback, Device};
+    use std::ffi::{c_char, c_int, c_void};
+
+    // Makes sure libusb, which libairspy calls, is linked in.
+    use libusb1_sys as _;
+
+    unsafe extern "C" {
+        pub fn airspy_open(device: *mut Device) -> c_int;
+        pub fn airspy_open_fd(device: *mut Device, fd: c_int) -> c_int;
+        pub fn airspy_close(device: Device) -> c_int;
+        pub fn airspy_get_samplerates(device: Device, buffer: *mut u32, len: u32) -> c_int;
+        pub fn airspy_set_samplerate(device: Device, samplerate: u32) -> c_int;
+        pub fn airspy_set_sample_type(device: Device, sample_type: c_int) -> c_int;
+        pub fn airspy_set_freq(device: Device, freq_hz: u32) -> c_int;
+        pub fn airspy_set_linearity_gain(device: Device, value: u8) -> c_int;
+        pub fn airspy_set_sensitivity_gain(device: Device, value: u8) -> c_int;
+        pub fn airspy_set_rf_bias(device: Device, value: u8) -> c_int;
+        pub fn airspy_start_rx(device: Device, callback: BlockCallback, ctx: *mut c_void) -> c_int;
+        pub fn airspy_stop_rx(device: Device) -> c_int;
+        pub fn airspy_error_name(errcode: c_int) -> *const c_char;
+    }
+}
+
+#[cfg(target_os = "android")]
+impl Lib {
+    pub fn load() -> Result<Self, String> {
+        use linked::*;
+        Ok(Self {
+            open: airspy_open,
+            open_fd: Some(airspy_open_fd),
+            close: airspy_close,
+            get_samplerates: airspy_get_samplerates,
+            set_samplerate: airspy_set_samplerate,
+            set_sample_type: airspy_set_sample_type,
+            set_freq: airspy_set_freq,
+            set_linearity_gain: airspy_set_linearity_gain,
+            set_sensitivity_gain: airspy_set_sensitivity_gain,
+            set_rf_bias: airspy_set_rf_bias,
+            start_rx: airspy_start_rx,
+            stop_rx: airspy_stop_rx,
+            error_name: airspy_error_name,
+        })
+    }
+}
+
+#[cfg(not(target_os = "android"))]
 impl Lib {
     pub fn load() -> Result<Self, String> {
         // On Linux the unversioned name only exists where development files
@@ -75,8 +129,11 @@ impl Lib {
                 *unsafe { library.get(concat!("airspy_", $name, "\0").as_bytes()) }.map_err(|e| e.to_string())?
             };
         }
+        // SAFETY: as above; absent from older libraries, which is fine.
+        let open_fd = unsafe { library.get(b"airspy_open_fd\0") }.ok().map(|f| *f);
         Ok(Self {
             open: symbol!("open"),
+            open_fd,
             close: symbol!("close"),
             get_samplerates: symbol!("get_samplerates"),
             set_samplerate: symbol!("set_samplerate"),
