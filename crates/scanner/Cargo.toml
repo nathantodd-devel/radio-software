@@ -1,12 +1,12 @@
 [package]
 name = "scanner"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 
 [dependencies]
-airspy = { path = "../drivers/airspy" }
-audio = { path = "../drivers/audio" }
-radiocore = { path = "../radiocore" }
+airspy = { path = "../drivers/airspy" , version = "0.2.0" }
+audio = { path = "../drivers/audio" , version = "0.2.0" }
+radiocore = { path = "../radiocore" , version = "0.2.0" }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 ctrlc = "3"
 rusqlite = { version = "0.40.2", features = ["bundled"] }

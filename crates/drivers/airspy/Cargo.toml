@@ -1,6 +1,6 @@
 [package]
 name = "airspy"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Safe interface to Airspy R2/Mini receivers through the system's libairspy"
 

@@ -11,9 +11,9 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use gpui::{
-    App, Application, Bounds, Context, CursorStyle, Decorations, Div, FontWeight, MouseButton, PathPromptOptions,
-    Pixels, ResizeEdge, Rgba, SharedString, Stateful, TitlebarOptions, Window, WindowBounds, WindowDecorations,
-    WindowOptions, div, prelude::*, px, relative, rgb, size,
+    App, Application, Bounds, Context, CursorStyle, Decorations, Div, FocusHandle, FontWeight, KeyDownEvent,
+    MouseButton, PathPromptOptions, Pixels, ResizeEdge, Rgba, SharedString, Stateful, TitlebarOptions, Window,
+    WindowBounds, WindowDecorations, WindowOptions, div, prelude::*, px, relative, rgb, size,
 };
 use scanner::db::{Db, System};
 use scanner::engine::{self, Config};
@@ -29,6 +29,8 @@ const TITLE: &str = "Airspy Scanner";
 const DEFAULT_SIZE: (f32, f32) = (1410., 760.);
 const MIN_SIZE: (f32, f32) = (640., 320.);
 const SIDEBAR_WIDTH: f32 = 220.;
+const THEME_LIST_WIDTH: f32 = 220.;
+const THEME_LIST_HEIGHT: f32 = 180.;
 const ACTIVITY_WIDTH: f32 = 380.;
 /// Share of the display a new window may take up.
 const MAX_DISPLAY_SHARE: f32 = 0.85;
@@ -124,6 +126,19 @@ struct ScannerView {
     show_settings: bool,
     /// The themes on offer, as of when the settings page was opened.
     themes: Vec<String>,
+    /// The theme list, while it is dropped down.
+    theme_search: Option<ThemeSearch>,
+    /// Keyboard focus for typing into the theme list.
+    theme_focus: FocusHandle,
+}
+
+/// What has been typed into the open theme list, and where in it the
+/// keyboard is.
+#[derive(Default)]
+struct ThemeSearch {
+    query: String,
+    /// Index into the themes that match the query.
+    highlighted: usize,
 }
 
 impl ScannerView {
@@ -138,6 +153,8 @@ impl ScannerView {
             settings: Settings::load(None),
             show_settings: false,
             themes: Vec::new(),
+            theme_search: None,
+            theme_focus: cx.focus_handle(),
         };
         match Db::open(&Db::default_path()) {
             Ok(db) => view.db = Some(db),
@@ -382,6 +399,7 @@ impl ScannerView {
                 button("settings", "Settings", show_settings, theme().accent).on_click(cx.listener(
                     move |this, _, _, cx| {
                         this.show_settings = !show_settings;
+                        this.theme_search = None;
                         this.themes = theme::available();
                         cx.notify();
                     },
@@ -794,6 +812,159 @@ impl ScannerView {
             }))
     }
 
+    /// Themes whose names contain what has been typed, in any letter case.
+    fn matching_themes(&self) -> Vec<String> {
+        let query = self
+            .theme_search
+            .as_ref()
+            .map(|s| s.query.to_lowercase())
+            .unwrap_or_default();
+        self.themes
+            .iter()
+            .filter(|name| name.to_lowercase().contains(&query))
+            .cloned()
+            .collect()
+    }
+
+    fn choose_theme(&mut self, name: String) {
+        // A theme that can't be read falls back to the default.
+        self.error = theme::select(&name).err();
+        let chosen = if self.error.is_none() {
+            name
+        } else {
+            theme::DEFAULT.into()
+        };
+        self.update_settings(false, |s| s.theme = chosen);
+        self.theme_search = None;
+    }
+
+    /// Typing while the theme list is open: letters narrow it down, the
+    /// arrows move through it, Enter picks and Escape closes.
+    fn theme_search_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+        let matches = self.matching_themes();
+        let Some(search) = &mut self.theme_search else { return };
+        let keystroke = &event.keystroke;
+        match keystroke.key.as_str() {
+            "escape" => self.theme_search = None,
+            "enter" => {
+                if let Some(name) = matches.get(search.highlighted) {
+                    self.choose_theme(name.clone());
+                }
+            }
+            "down" => search.highlighted = (search.highlighted + 1).min(matches.len().saturating_sub(1)),
+            "up" => search.highlighted = search.highlighted.saturating_sub(1),
+            "backspace" => {
+                search.query.pop();
+                search.highlighted = 0;
+            }
+            _ => {
+                let shortcut = keystroke.modifiers.control || keystroke.modifiers.platform || keystroke.modifiers.alt;
+                let Some(typed) = keystroke.key_char.as_ref().filter(|_| !shortcut) else {
+                    return;
+                };
+                search.query.push_str(typed);
+                search.highlighted = 0;
+            }
+        }
+        cx.stop_propagation();
+        cx.notify();
+    }
+
+    /// The theme setting's control: the current theme, which drops down
+    /// into a list that can be searched by typing.
+    fn theme_picker(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let current = self.settings.theme.clone();
+        let picker = div()
+            .flex()
+            .flex_col()
+            .flex_none()
+            .w(px(THEME_LIST_WIDTH))
+            .gap_1()
+            .child(
+                div()
+                    .id("theme-current")
+                    .flex()
+                    .justify_between()
+                    .px_2()
+                    .rounded_md()
+                    .text_sm()
+                    .bg(rgb(theme().raised))
+                    .cursor_pointer()
+                    .hover(|style| style.opacity(0.8))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.theme_search = match this.theme_search {
+                            Some(_) => None,
+                            None => {
+                                this.themes = theme::available();
+                                window.focus(&this.theme_focus);
+                                Some(ThemeSearch::default())
+                            }
+                        };
+                        cx.notify();
+                    }))
+                    .child(div().truncate().child(current.clone()))
+                    .child(div().flex_none().text_color(rgb(theme().muted)).child("▾")),
+            );
+        let Some(search) = &self.theme_search else {
+            return picker.into_any_element();
+        };
+        let matches = self.matching_themes();
+        let highlighted = search.highlighted.min(matches.len().saturating_sub(1));
+        picker
+            .track_focus(&self.theme_focus)
+            .on_key_down(cx.listener(|this, event, _, cx| this.theme_search_key(event, cx)))
+            .child(
+                div()
+                    .px_2()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(theme().accent))
+                    .text_sm()
+                    .child(if search.query.is_empty() {
+                        div().text_color(rgb(theme().muted)).child("Type to search…")
+                    } else {
+                        div().child(format!("{}▏", search.query))
+                    }),
+            )
+            .child(
+                div()
+                    .id("theme-list")
+                    .max_h(px(THEME_LIST_HEIGHT))
+                    .overflow_y_scroll()
+                    .rounded_md()
+                    .bg(rgb(theme().panel))
+                    .border_1()
+                    .border_color(rgb(theme().border))
+                    .when(matches.is_empty(), |list| {
+                        list.child(
+                            div()
+                                .px_2()
+                                .text_sm()
+                                .text_color(rgb(theme().muted))
+                                .child("No themes match."),
+                        )
+                    })
+                    .children(matches.into_iter().enumerate().map(|(i, name)| {
+                        let chosen = name.clone();
+                        div()
+                            .id(("theme", i))
+                            .px_2()
+                            .text_sm()
+                            .truncate()
+                            .cursor_pointer()
+                            .when(i == highlighted, |item| item.bg(rgb(theme().raised)))
+                            .when(name == current, |item| item.text_color(rgb(theme().accent)))
+                            .hover(|style| style.bg(rgb(theme().raised)))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.choose_theme(chosen.clone());
+                                cx.notify();
+                            }))
+                            .child(name)
+                    })),
+            )
+            .into_any_element()
+    }
+
     fn settings_page(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let s = &self.settings;
         let (gain, multiband, dwell, stay, save) =
@@ -913,25 +1084,7 @@ impl ScannerView {
                     "Colours for the app. Add your own as .json files in {}.",
                     theme::dir().display()
                 ),
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .justify_end()
-                    .gap_1()
-                    .max_w(px(360.))
-                    .children(self.themes.iter().enumerate().map(|(i, name)| {
-                        let name = name.clone();
-                        button(("theme", i), name.clone(), name == self.settings.theme, theme().accent).on_click(
-                            cx.listener(move |this, _, _, cx| {
-                                // A theme that can't be read falls back to the default.
-                                this.error = theme::select(&name).err();
-                                let chosen = if this.error.is_none() { name.clone() } else { theme::DEFAULT.into() };
-                                this.update_settings(false, |s| s.theme = chosen);
-                                cx.notify();
-                            }),
-                        )
-                    }))
-                    .into_any_element(),
+                self.theme_picker(cx),
             ))
             .child(
                 div()
