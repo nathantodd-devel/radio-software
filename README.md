@@ -1,5 +1,9 @@
 # Airspy Scanner
 
+[![CI](https://github.com/nathantodd-devel/radio-software/actions/workflows/ci.yml/badge.svg)](https://github.com/nathantodd-devel/radio-software/actions/workflows/ci.yml)
+[![Android](https://github.com/nathantodd-devel/radio-software/actions/workflows/android.yml/badge.svg)](https://github.com/nathantodd-devel/radio-software/actions/workflows/android.yml)
+[![Release](https://github.com/nathantodd-devel/radio-software/actions/workflows/release.yml/badge.svg)](https://github.com/nathantodd-devel/radio-software/actions/workflows/release.yml)
+
 A radio scanner for [Airspy](https://airspy.com) and RTL-SDR software-defined receivers,
 written in Rust.
 
@@ -24,6 +28,7 @@ It ships with channel lists for San Mateo County, California, and can import any
 - [Themes](#themes)
 - [Building from source](#building-from-source)
 - [Android](#android)
+- [Continuous integration](#continuous-integration)
 - [Project layout](#project-layout)
 - [How it works](#how-it-works)
 - [Adding a receiver driver](#adding-a-receiver-driver)
@@ -68,7 +73,7 @@ This is a young project. What has and has not been exercised:
 | Linux, Airspy R2, analog FM and P25 Phase 1 | Tested on air |
 | Band hopping, one-channel-at-a-time mode, 2.5 MSPS | Tested on air |
 | Linux desktop app | Builds and runs; developed without being able to see it, so expect rough edges |
-| Windows and macOS builds | Set up in the release workflow; never built or run |
+| Windows and macOS builds | Built and packaged by the release workflow for every release so far; never run by anyone |
 | RadioReference API import | Requests verified against the live service; parsing of real replies untested |
 | RadioReference CSV import | Tested only on hand-made samples |
 | Web version (`scanner-web`) | Tested on air with Chrome on Linux, driven by script: live data, controls, replay and audio delivery. Sound has not been listened to by a person; other browsers, phones and touch scrolling are untested |
@@ -424,6 +429,50 @@ Known issues:
 On Android the Airspy library is compiled into the app from
 [`crates/drivers/airspy/vendor/libairspy`](crates/drivers/airspy/vendor/libairspy), a copy of
 upstream libairspy 1.0.12.
+
+## Continuous integration
+
+Three GitHub Actions workflows live in `.github/workflows`. The repository is public, so they
+cost nothing to run.
+
+| Workflow | Runs on | Jobs | Typical time |
+|---|---|---|---|
+| **CI** (`ci.yml`) | every push to `main` and every pull request | Format, lint (`clippy -D warnings`), build and test the workspace; format and build the browser client | 1 min; 2.5 min |
+| **Android** (`android.yml`) | pushes to `main` and pull requests that change `mobile/`, or by hand | Build a debug APK | 2.5-4.5 min |
+| **Release** (`release.yml`) | a pushed tag like `v0.3.0`, or by hand | Browser client (4 min), then Linux (7 min), Windows (12 min) and macOS (7 min) packages, the Android APK (8.5 min), and publishing the release | about 17 min |
+
+Checked with the `gh` command on 2026-10-09: all 9 CI runs, all 5 Android runs and all 3 release
+runs (`v0.1.0`, `v0.2.0`, `v0.3.0`) had passed. The `v0.3.0` release carries four files: Linux
+(19 MB), Windows (15 MB), macOS (12 MB) and the Android APK (11 MB).
+
+To see how it is doing:
+
+```sh
+gh run list --limit 10            # recent runs and whether they passed
+gh run view <run id>              # one run's jobs
+gh run view <run id> --log-failed # what went wrong in a failed one
+gh run watch                      # follow a run in progress
+gh workflow run release.yml       # build every package without publishing
+gh release view v0.3.0            # a release's files
+```
+
+Things to know:
+
+- A release is made by tagging: `scripts/set-version 0.4.0`, commit, `git tag v0.4.0`,
+  `git push origin main v0.4.0`. Running the release workflow by hand builds the same packages
+  as downloadable artifacts and publishes nothing.
+- No signing secrets are set in the repository, so released APKs are signed with a debug key:
+  they install, but can't be updated in place by one signed differently. Setting
+  `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and
+  `ANDROID_KEY_PASSWORD` makes the workflow sign with your own key.
+- The build caches were using 9.9 GB of GitHub's 10 GB allowance. When that is full GitHub
+  drops the oldest, which only makes the next build slower; `gh cache list` shows them and
+  `gh cache delete --all` clears them.
+- The Android workflow only runs when `mobile/` changes, so a change under `crates/` that
+  breaks the Android app isn't caught until the next release build.
+- Everything builds with `--locked`, so a change of version or dependency has to update the
+  lockfiles (there are three: the workspace's, `mobile/` and `web/`). `scripts/set-version`
+  does that for versions.
 
 ## Project layout
 
