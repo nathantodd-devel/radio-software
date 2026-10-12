@@ -141,16 +141,16 @@ impl Editor {
         };
         let optional = |field: usize| Some(self.text(field)).filter(|t| !t.is_empty());
         let kind = match mode {
-            Mode::FmWide | Mode::FmNarrow => Kind::Analog {
-                freq_hz: freq_hz()?,
-                tone_hz: optional(TONE)
-                    .map(|t| {
-                        t.parse()
-                            .map_err(|_| "Tone must be a CTCSS frequency in Hz, like 114.8, or empty")
-                    })
-                    .transpose()?,
-                narrow: mode == Mode::FmNarrow,
-            },
+            Mode::FmWide | Mode::FmNarrow => {
+                let (tone_hz, dcs) = scanner::plan::parse_squelch(self.text(TONE))
+                    .ok_or("Tone must be a CTCSS frequency in Hz, like 114.8, a DCS code, like D023, or empty")?;
+                Kind::Analog {
+                    freq_hz: freq_hz()?,
+                    tone_hz,
+                    dcs,
+                    narrow: mode == Mode::FmNarrow,
+                }
+            }
             Mode::P25 => Kind::Digital {
                 freq_hz: freq_hz()?,
                 nac: optional(NAC)
@@ -213,7 +213,7 @@ impl ScannerView {
                         system.map(|s| s.name.clone()).unwrap_or_default(),
                     ),
                     Editor::field(
-                        "Location",
+                        "County",
                         "Shown as the heading it is listed under",
                         system.map(|s| s.location.clone()).unwrap_or_default(),
                     ),
@@ -244,6 +244,7 @@ impl ScannerView {
                 kind: Kind::Analog {
                     freq_hz: 0.0,
                     tone_hz: None,
+                    dcs: None,
                     narrow: true,
                 },
                 tag: String::new(),
@@ -261,11 +262,12 @@ impl ScannerView {
             Kind::Analog {
                 freq_hz,
                 tone_hz,
+                dcs,
                 narrow,
             } => (
                 if narrow { Mode::FmNarrow } else { Mode::FmWide },
                 mhz(freq_hz),
-                tone_hz.map(|t| t.to_string()).unwrap_or_default(),
+                scanner::plan::squelch_text(tone_hz, dcs),
                 String::new(),
                 String::new(),
             ),

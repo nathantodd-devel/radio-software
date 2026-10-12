@@ -377,8 +377,106 @@ impl Hub {
         self.plan().is_some_and(|plan| channel < plan.entries.len())
     }
 
-    pub fn handle(&mut self, message: ClientMessage) {
+    /// Do what a listener asks. Returns what to tell that listener alone.
+    pub fn handle(&mut self, message: ClientMessage) -> Vec<Outgoing> {
+        let reply = match message {
+            ClientMessage::Import { name, county, text } => Some(self.import(&name, &county, &text)),
+            ClientMessage::ReplaceSystem { id, name, county, text } => {
+                Some(self.replace_system(id, &name, &county, &text))
+            }
+            ClientMessage::RemoveSystem { id } => {
+                let removed = self.db.remove_system(id).map(|()| "Removed.".to_string());
+                Some(self.edited(removed))
+            }
+            ClientMessage::SystemText { id } => Some(self.system_text(id)),
+            other => {
+                self.act_on(other);
+                None
+            }
+        };
+        // So whoever asked sees the result at once.
+        self.send_status();
+        reply
+            .into_iter()
+            .map(|message| Outgoing::Text(Arc::from(message.to_json())))
+            .collect()
+    }
+
+    /// A system as text, for editing.
+    fn system_text(&self, id: i64) -> ServerMessage {
+        let found = self.db.systems().and_then(|systems| {
+            let system = systems
+                .into_iter()
+                .find(|s| s.id == id)
+                .ok_or("That system is no longer there.")?;
+            Ok((system, self.db.plan(&[id])?))
+        });
+        match found {
+            Ok((system, plan)) => ServerMessage::SystemText {
+                id,
+                name: system.name,
+                county: system.location,
+                text: plan.to_text(),
+            },
+            Err(text) => ServerMessage::Notice { text, error: true },
+        }
+    }
+
+    /// Add a system from the text of a channel file.
+    fn import(&mut self, name: &str, county: &str, text: &str) -> ServerMessage {
+        let name = match name.trim() {
+            "" => "Imported",
+            name => name,
+        };
+        let added = Plan::parse(text, name, None).and_then(|(plan, notes)| {
+            self.db.add_system(name, county, &plan)?;
+            let mut said = format!("Added {name}: {} channels.", plan.entries.len());
+            for note in notes {
+                said.push_str(&format!(" Note: {note}."));
+            }
+            Ok(said)
+        });
+        self.edited(added)
+    }
+
+    /// Put edited text in place of a system.
+    fn replace_system(&mut self, id: i64, name: &str, county: &str, text: &str) -> ServerMessage {
+        let name = name.trim();
+        if name.is_empty() {
+            return ServerMessage::Notice {
+                text: "A system needs a name.".into(),
+                error: true,
+            };
+        }
+        let saved = Plan::parse(text, name, None).and_then(|(plan, _)| {
+            self.db.replace_system(id, name, county, &plan)?;
+            Ok(format!("Saved {name}: {} channels.", plan.entries.len()))
+        });
+        self.edited(saved)
+    }
+
+    /// After a change to the channel database: scan what is selected of what
+    /// is there now, tell everyone, and say how it went.
+    fn edited(&mut self, result: Result<String, String>) -> ServerMessage {
+        if result.is_ok() {
+            let systems = self.db.systems().unwrap_or_default();
+            self.settings.selected.retain(|id| systems.iter().any(|s| s.id == *id));
+            self.settings.save(&self.db);
+            self.start();
+            self.send_everything();
+        }
+        match result {
+            Ok(text) => ServerMessage::Notice { text, error: false },
+            Err(text) => ServerMessage::Notice { text, error: true },
+        }
+    }
+
+    fn act_on(&mut self, message: ClientMessage) {
         match message {
+            ClientMessage::Import { .. }
+            | ClientMessage::ReplaceSystem { .. }
+            | ClientMessage::RemoveSystem { .. }
+            | ClientMessage::SystemText { .. } => {}
             ClientMessage::ToggleSystem { id } => self.toggle_system(id),
             ClientMessage::SetVolume { volume } => {
                 self.update(false, |s| s.volume = volume.clamp(0.5, 10.0));
@@ -473,8 +571,6 @@ impl Hub {
                 }
             }
         }
-        // So whoever asked sees the result at once.
-        self.send_status();
     }
 
     /// Add a system to the scan or take it out. In one-band mode, systems

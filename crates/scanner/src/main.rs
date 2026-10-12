@@ -15,8 +15,10 @@ const USAGE: &str = "\
 usage: scanner [options] SYSTEM...     scan one or more systems
        scanner systems                 list the systems in the channel database
        scanner channels SYSTEM...      list the channels of systems
-       scanner import FILE [--name NAME] [--location PLACE] [--sites FILE]
+       scanner import FILE [--name NAME] [--county COUNTY] [--sites FILE]
        scanner remove SYSTEM
+       scanner counties                list the counties and how many systems each has
+       scanner remove-county COUNTY    remove a county and every system in it
        scanner radioreference system ID    import a trunked system by its system ID
        scanner radioreference county ID    import a county's conventional channels
        scanner update [--check] [--yes]    update to the newest release
@@ -149,7 +151,8 @@ fn parse_args() -> Options {
             "--stay" => o.config.max_stay_secs = num(&a, value()),
             "--db" => o.db = PathBuf::from(value()),
             "--name" => o.name = Some(value()),
-            "--location" => o.location = Some(value()),
+            // A system belongs to a county; "location" is the old word for it.
+            "--county" | "--location" => o.location = Some(value()),
             "--sites" => o.sites = Some(PathBuf::from(value())),
             "--check" => o.check = true,
             "-y" | "--yes" => o.yes = true,
@@ -177,7 +180,7 @@ fn list_systems(db: &Db) {
             println!(
                 "{}",
                 if s.location.is_empty() {
-                    "(no location)"
+                    "(no county)"
                 } else {
                     &s.location
                 }
@@ -211,6 +214,7 @@ fn load_plan(db: &Db, names: &[String]) -> Plan {
 fn list_channels(plan: &Plan) {
     for e in &plan.entries {
         let tone = match e.kind {
+            Kind::Analog { dcs: Some(code), .. } => format!(" D{code:03o}"),
             Kind::Analog { tone_hz: Some(t), .. } => format!("{t:5.1}"),
             Kind::Analog { tone_hz: None, .. } => "  CSQ".into(),
             Kind::Digital { nac: Some(nac), .. } => format!("  {nac:03X}"),
@@ -434,13 +438,26 @@ fn main() {
         ["systems"] => list_systems(&db),
         ["channels", _, ..] => list_channels(&load_plan(&db, &o.words[1..])),
         ["import", file] => import(&mut db, &o, file),
+        ["counties"] => {
+            for county in db.counties().unwrap_or_else(|e| die(e)) {
+                println!("{:>5}  {:<36} {} systems", county.id, county.name, county.systems);
+            }
+        }
+        ["remove-county", county] => {
+            let county = db.find_county(county).unwrap_or_else(|e| die(e));
+            db.remove_county(county.id).unwrap_or_else(|e| die(e));
+            println!("Removed {} and its {} systems", county.name, county.systems);
+        }
         ["remove", system] => {
             let system = db.find(system).unwrap_or_else(|e| die(e));
             db.remove_system(system.id).unwrap_or_else(|e| die(e));
             println!("Removed system {}, {:?}", system.id, system.name);
         }
         ["radioreference", what @ ("system" | "county"), id] => import_radioreference(&mut db, &o, what, id),
-        ["channels" | "import" | "remove" | "radioreference", ..] => die(format!("wrong arguments\n{USAGE}")),
+        [
+            "channels" | "import" | "remove" | "remove-county" | "counties" | "radioreference",
+            ..,
+        ] => die(format!("wrong arguments\n{USAGE}")),
         [] => {
             eprintln!("scanner: which system? These are in the channel database:\n");
             list_systems(&db);

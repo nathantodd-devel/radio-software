@@ -2,9 +2,11 @@
 
 pub mod biquad;
 pub mod channelizer;
+pub mod dcs;
 pub mod level;
 pub mod nfm;
 pub mod p25;
+pub mod tsbk;
 
 pub use channelizer::Channelizer;
 pub use nfm::{NfmChannel, NfmConfig};

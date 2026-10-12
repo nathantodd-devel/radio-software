@@ -64,6 +64,97 @@
                 background: #2a303a;
                 font-family: ui-monospace, monospace;
             }
+            /* The editor for importing and editing systems: ordinary page
+               elements over the app, so that typing, pasting and choosing a
+               file work as they do anywhere. */
+            #editor {
+                display: none;
+                position: fixed;
+                inset: 0;
+                z-index: 2;
+                overflow: auto;
+                padding: 24px 16px;
+                background: rgba(18, 19, 24, 0.86);
+                color: #e6e9ee;
+                font: 15px/1.45 system-ui, sans-serif;
+            }
+            #editor form {
+                max-width: 760px;
+                margin: 0 auto;
+                padding: 20px;
+                border: 1px solid #313743;
+                border-radius: 8px;
+                background: #1c2027;
+            }
+            #editor h1 {
+                margin-bottom: 14px;
+                font-size: 18px;
+            }
+            #editor label {
+                display: block;
+                margin: 10px 0 4px;
+                color: #8b93a1;
+                font-size: 13px;
+            }
+            #editor input[type="text"],
+            #editor textarea {
+                width: 100%;
+                padding: 8px 10px;
+                border: 1px solid #313743;
+                border-radius: 6px;
+                background: #121318;
+                color: inherit;
+                font: inherit;
+                -webkit-user-select: text;
+                user-select: text;
+            }
+            #editor textarea {
+                height: 46vh;
+                min-height: 180px;
+                font: 13px/1.5 ui-monospace, monospace;
+                white-space: pre;
+            }
+            #editor .row {
+                display: flex;
+                gap: 12px;
+            }
+            #editor .row > div {
+                flex: 1;
+            }
+            #editor .help {
+                margin-top: 6px;
+                color: #8b93a1;
+                font-size: 13px;
+            }
+            #editor .buttons {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 8px;
+                margin-top: 14px;
+            }
+            #editor button {
+                padding: 8px 14px;
+                border: 0;
+                border-radius: 6px;
+                background: #2a303a;
+                color: inherit;
+                font: inherit;
+                cursor: pointer;
+            }
+            #editor button.main {
+                background: #4cc38a;
+                color: #121318;
+                font-weight: 600;
+            }
+            #editor button.danger {
+                margin-left: auto;
+                color: #e5645c;
+            }
+            #editor #editor-said {
+                min-height: 1.4em;
+                margin-top: 10px;
+                font-size: 14px;
+            }
             #notice .why {
                 margin: 0;
                 color: #8b93a1;
@@ -72,6 +163,137 @@
         </style>
     </head>
     <body>
+        <div id="editor">
+            <form onsubmit="return false">
+                <h1 id="editor-title">Import a system</h1>
+                <div class="row">
+                    <div>
+                        <label for="editor-name">Name</label>
+                        <input id="editor-name" type="text" autocomplete="off" />
+                    </div>
+                    <div>
+                        <label for="editor-county">County</label>
+                        <input id="editor-county" type="text" list="editor-counties" autocomplete="off" />
+                        <datalist id="editor-counties"></datalist>
+                    </div>
+                </div>
+                <label for="editor-text">Channels</label>
+                <textarea id="editor-text" spellcheck="false"></textarea>
+                <div class="help">
+                    One channel a line: <code>488.3125, 114.8, w, Name, Description</code> (the tone may be a DCS code
+                    like <code>D023</code>, or <code>-</code>; <code>w</code> is wide FM, <code>n</code> narrow,
+                    <code>p25</code> digital with a NAC in place of the tone). For a trunked P25 system:
+                    <code>p25, 772.03125</code> for each frequency and <code>tg, 865, Name, Description</code> for
+                    each talkgroup. A RadioReference frequency export can be pasted or loaded as it is.
+                </div>
+                <div id="editor-said" role="status"></div>
+                <div class="buttons">
+                    <button class="main" id="editor-save" type="button">Import</button>
+                    <button id="editor-load" type="button">Load a file…</button>
+                    <button id="editor-cancel" type="button">Cancel</button>
+                    <button class="danger" id="editor-remove" type="button">Remove system</button>
+                    <input id="editor-file" type="file" accept=".csv,.txt,text/csv,text/plain" hidden />
+                </div>
+            </form>
+        </div>
+        <script>
+            // Importing and editing systems. The app's buttons call
+            // dmps.import() and dmps.edit(id); what is typed here goes to the
+            // scanner over a connection of this script's own.
+            (() => {
+                const el = (id) => document.getElementById("editor" + (id ? "-" + id : ""));
+                let socket = null;
+                let editing = null; // the id of the system being edited, or null when importing
+                let removing = false;
+                const say = (text, error) => {
+                    el("said").textContent = text;
+                    el("said").style.color = error ? "#e5645c" : "#4cc38a";
+                };
+                const send = (message) => {
+                    if (!socket || socket.readyState !== WebSocket.OPEN) {
+                        say("Not connected to the scanner.", true);
+                        return;
+                    }
+                    socket.send(JSON.stringify(message));
+                };
+                const connect = () => {
+                    const scheme = location.protocol === "https:" ? "wss" : "ws";
+                    socket = new WebSocket(scheme + "://" + location.host + "/ws");
+                    socket.onclose = () => setTimeout(connect, 2000);
+                    socket.onmessage = (event) => {
+                        if (typeof event.data !== "string") return;
+                        const message = JSON.parse(event.data);
+                        if (message.type === "systems") {
+                            // The counties there are, to choose from.
+                            const counties = [...new Set(message.systems.map((s) => s.location).filter(Boolean))];
+                            el("counties").replaceChildren(
+                                ...counties.map((county) => Object.assign(document.createElement("option"), { value: county })),
+                            );
+                        } else if (message.type === "system_text" && message.id === editing) {
+                            el("name").value = message.name;
+                            el("county").value = message.county;
+                            el("text").value = message.text;
+                        } else if (message.type === "notice" && el().style.display === "block") {
+                            say(message.text, message.error);
+                            // Done: leave what was said up for a moment.
+                            if (!message.error) setTimeout(close, 900);
+                        }
+                    };
+                };
+                const open = (id) => {
+                    editing = id;
+                    removing = false;
+                    el("title").textContent = id === null ? "Import a system" : "Edit system";
+                    el("save").textContent = id === null ? "Import" : "Save";
+                    el("remove").style.display = id === null ? "none" : "";
+                    el("remove").textContent = "Remove system";
+                    for (const field of ["name", "county", "text"]) el(field).value = "";
+                    say("", false);
+                    el().style.display = "block";
+                    if (id !== null) send({ type: "system_text", id });
+                    el(id === null ? "name" : "text").focus();
+                };
+                const close = () => {
+                    el().style.display = "none";
+                    document.querySelector("canvas")?.focus();
+                };
+                el("cancel").onclick = close;
+                el("load").onclick = () => el("file").click();
+                el("file").onchange = async () => {
+                    const file = el("file").files[0];
+                    if (!file) return;
+                    el("text").value = await file.text();
+                    if (!el("name").value) el("name").value = file.name.replace(/\.[^.]*$/, "");
+                    el("file").value = "";
+                };
+                el("save").onclick = () => {
+                    const fields = { name: el("name").value, county: el("county").value, text: el("text").value };
+                    if (!fields.text.trim()) return say("There are no channels to save.", true);
+                    say("Saving…", false);
+                    send(editing === null ? { type: "import", ...fields } : { type: "replace_system", id: editing, ...fields });
+                };
+                el("remove").onclick = () => {
+                    // Asked twice: there is no undoing it.
+                    if (!removing) {
+                        removing = true;
+                        el("remove").textContent = "Really remove it?";
+                        return;
+                    }
+                    send({ type: "remove_system", id: editing });
+                };
+                // Keys typed here are for the form, not the app underneath.
+                for (const type of ["keydown", "keyup", "keypress", "wheel", "pointerdown", "pointerup", "mousedown", "mouseup"]) {
+                    el().addEventListener(type, (event) => event.stopPropagation());
+                }
+                // Opened a moment later, not from inside the app's own handling of
+                // the click: moving the focus there would interrupt it.
+                window.dmps = {
+                    import: () => setTimeout(() => open(null), 0),
+                    edit: (id) => setTimeout(() => open(id), 0),
+                };
+                connect();
+            })();
+        </script>
         <!-- Shown instead of the app when this browser can't run it, saying how to make it able to. -->
         <div id="notice" role="alert"><div></div></div>
         <script>

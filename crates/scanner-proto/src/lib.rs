@@ -149,6 +149,17 @@ pub enum ServerMessage {
     Options(Options),
     /// Sent a few times a second.
     Status(Status),
+    /// A system as text, in the channel-file format, for editing. Sent only
+    /// to whoever asked with [`ClientMessage::SystemText`].
+    SystemText {
+        id: i64,
+        name: String,
+        county: String,
+        text: String,
+    },
+    /// How something asked for went, when it is worth saying. Sent only to
+    /// whoever asked.
+    Notice { text: String, error: bool },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -206,6 +217,29 @@ pub enum ClientMessage {
         call: u64,
     },
     StopReplay,
+    /// Add a system from the text of a channel file: this program's own
+    /// format or a RadioReference export. It joins the county named, which
+    /// is made if need be.
+    Import {
+        name: String,
+        county: String,
+        text: String,
+    },
+    /// Ask for a system as text, to edit.
+    SystemText {
+        id: i64,
+    },
+    /// Put edited text in place of a system's channels, with its name and
+    /// county.
+    ReplaceSystem {
+        id: i64,
+        name: String,
+        county: String,
+        text: String,
+    },
+    RemoveSystem {
+        id: i64,
+    },
 }
 
 impl ServerMessage {

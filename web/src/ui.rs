@@ -121,6 +121,8 @@ impl Client {
                 }
                 ServerMessage::Options(options) => self.options = Some(options),
                 ServerMessage::Status(status) => self.status = status,
+                // For the page's editor, which has a connection of its own.
+                ServerMessage::SystemText { .. } | ServerMessage::Notice { .. } => {}
             },
         }
         cx.notify();
@@ -478,15 +480,22 @@ impl Client {
 
     fn systems(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         scroller("systems")
-            .child(div().px_4().py_2().child(heading("Systems")))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .px_4()
+                    .py_2()
+                    .child(heading("Systems"))
+                    .child(button("import", "Import…", false, ACCENT).on_click(|_, _, _| page_editor("import", None))),
+            )
             .when(self.systems.is_empty(), |list| {
-                list.child(note(
-                    "The channel database is empty. Add systems with the desktop app or the scanner command.",
-                ))
+                list.child(note("The channel database is empty. Import a system to begin."))
             })
-            .children(self.systems.iter().map(|system| {
+            .children(self.systems.iter().enumerate().map(|(i, system)| {
                 let (id, selected) = (system.id, system.selected);
-                let span = if system.channels == 0 {
+                let detail = if system.channels == 0 {
                     "no channels".to_string()
                 } else {
                     format!(
@@ -496,11 +505,16 @@ impl Client {
                         system.hi_hz / 1e6
                     )
                 };
-                let detail = match system.location.as_str() {
-                    "" => span,
-                    location => format!("{location} · {span}"),
-                };
-                div()
+                // Systems come county by county: each county's name goes
+                // above its first.
+                let county = (i == 0 || self.systems[i - 1].location != system.location).then(|| {
+                    let name = match system.location.as_str() {
+                        "" => "No county".to_string(),
+                        county => county.to_string(),
+                    };
+                    div().px_4().pt_3().pb_1().child(heading(name))
+                });
+                let row = div()
                     .id(("system", id as usize))
                     .cursor_pointer()
                     .flex()
@@ -526,6 +540,14 @@ impl Client {
                             .child(div().truncate().child(system.name.clone()))
                             .child(div().text_sm().truncate().text_color(rgb(MUTED)).child(detail)),
                     )
+                    .child(
+                        button(("edit-system", id as usize), "Edit", false, ACCENT).on_click(move |_, _, cx| {
+                            // Not also a click on the row, which selects it.
+                            cx.stop_propagation();
+                            page_editor("edit", Some(id));
+                        }),
+                    );
+                div().children(county).child(row)
             }))
     }
 
@@ -773,6 +795,24 @@ impl Render for Client {
                     })
                     .child(main),
             )
+    }
+}
+
+/// Open the page's editor for systems (see index.html): `dmps.import()` or
+/// `dmps.edit(id)`. It is made of ordinary page elements, where typing,
+/// pasting and choosing a file work as they do on any page.
+fn page_editor(function: &str, system: Option<i64>) {
+    use wasm_bindgen::{JsCast, JsValue};
+    let Some(window) = web_sys::window() else { return };
+    let Ok(dmps) = js_sys::Reflect::get(&window, &"dmps".into()) else {
+        return;
+    };
+    let function = js_sys::Reflect::get(&dmps, &function.into())
+        .ok()
+        .and_then(|f| f.dyn_into::<js_sys::Function>().ok());
+    if let Some(function) = function {
+        let argument = system.map_or(JsValue::NULL, |id| JsValue::from_f64(id as f64));
+        function.call1(&dmps, &argument).ok();
     }
 }
 

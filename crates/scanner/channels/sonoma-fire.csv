@@ -4,8 +4,8 @@
 # freq_mhz, ctcss_hz, width (w = 5 kHz deviation, n = 2.5 kHz), tag, description
 # Earlier lines win when several channels are active at once.
 #
-# Ambulances are dispatched on REDCOM. Left out: Timber Cove Fire, which
-# uses a digital squelch code, and the hospital channels.
+# The tone column is a CTCSS tone in Hz or a DCS code (D631).
+# Ambulances are dispatched on REDCOM. Left out: the hospital channels.
 
 # Dispatch
 154.3100, 146.2, n, REDCOM,            Fire and EMS Dispatch (all zones)
@@ -32,6 +32,7 @@
 155.8950, 131.8, n, XSN Tac 14,        Tac 14 (zones 8, 5); Sebastopol Fire
 153.7925, 156.7, n, XSN NSC Tac,       North Sonoma Coast FPD Tac
 151.1000, 103.5, n, Rohnert Park PS2,  Rohnert Park Police Tac
+151.6250, D631,  w, Timber Cove,       Timber Cove Fire (local)
 
 # Interoperability
 153.9650, 156.7, n, XSN Victor 1,      Victor 1

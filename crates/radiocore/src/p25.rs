@@ -3,11 +3,14 @@
 //!
 //! Every voice frame names its talkgroup, so a receiver that listens to all
 //! of a site's frequencies at once never needs to follow the control channel.
+//! One that can't take them all in at once can: the control channel's
+//! messages are decoded too, and say which frequency each call is put on.
 
 use blip25_vocoder::vocoder::{Rate, Vocoder};
 use rustfft::num_complex::Complex32;
 
 use crate::level::CarrierLevel;
+use crate::tsbk;
 
 use std::f32::consts::{FRAC_PI_2, FRAC_PI_4};
 use std::sync::OnceLock;
@@ -34,6 +37,9 @@ const NID_DIBITS: usize = 57;
 const LDU_DIBITS: usize = 864;
 const TDU_DIBITS: usize = 72;
 const TDULC_DIBITS: usize = 216;
+/// Dibits in a trunking block, and the most blocks in one frame.
+const TSBK_DIBITS: usize = tsbk::CODED_BITS / 2;
+const TSBK_MOST: usize = 3;
 
 const DUID_TDU: u8 = 0x3;
 const DUID_LDU1: u8 = 0x5;
@@ -75,6 +81,14 @@ pub enum P25Frame {
     },
     /// The transmission ended.
     End,
+    /// This is a control channel, and it says a call for `talkgroup` is on
+    /// (or about to be on) the frequency `freq_hz`.
+    Grant {
+        talkgroup: u16,
+        freq_hz: f64,
+        /// The radio calling, when the message says.
+        source: Option<u32>,
+    },
 }
 
 pub struct P25Channel {
@@ -97,6 +111,8 @@ pub struct P25Channel {
     since_voice: usize,
     /// Samples since the last trunking block, if there has been one.
     since_control: Option<usize>,
+    /// How the system numbers its channels, as its control channel has said.
+    bands: [Option<tsbk::Band>; 16],
 }
 
 /// A frame whose sync has been found and that is waiting for its samples.
@@ -130,7 +146,13 @@ impl P25Channel {
             in_call: false,
             since_voice: 0,
             since_control: None,
+            bands: [None; 16],
         }
+    }
+
+    /// Whether this is a control channel: one has been heard on it lately.
+    pub fn is_control(&self) -> bool {
+        self.since_control.is_some_and(|since| since < CONTROL_HOLD)
     }
 
     /// Carrier level over the noise floor, in dB.
@@ -142,8 +164,7 @@ impl P25Channel {
     /// could turn out to be voice. A control channel doesn't count, and
     /// while the noise floor is still being learned the answer is yes.
     pub fn signal_present(&self) -> bool {
-        let control = self.since_control.is_some_and(|since| since < CONTROL_HOLD);
-        !self.level.floor().is_finite() || (self.level.snr_db() > PRESENT_DB && !control)
+        !self.level.floor().is_finite() || (self.level.snr_db() > PRESENT_DB && !self.is_control())
     }
 
     /// Forget everything in progress, as after the receiver was tuned away
@@ -175,6 +196,9 @@ impl P25Channel {
                     break;
                 }
                 if let Some(found) = self.find_sync() {
+                    // The search carries on from where the frame is, should it
+                    // turn out not to be one.
+                    self.search = found.start;
                     self.frame = Some(found);
                 } else {
                     self.search += 1;
@@ -201,11 +225,14 @@ impl P25Channel {
                 continue;
             }
             let (start, offset, duid) = (frame.start, frame.offset, frame.duid.unwrap());
-            let dibits = match duid {
+            let mut dibits = match duid {
                 DUID_LDU1 | DUID_LDU2 => LDU_DIBITS,
                 DUID_TDU => TDU_DIBITS,
                 DUID_TDULC => TDULC_DIBITS,
-                // Headers, trunking and data: nothing in them we need.
+                // As many blocks as there can be: how many there are is
+                // only known once they are read.
+                DUID_TSBK => on_air(NID_DIBITS - 1 + TSBK_MOST * TSBK_DIBITS),
+                // Headers and data: nothing in them we need.
                 _ => NID_DIBITS,
             };
             if self.phase.len() < start + dibits * SPS {
@@ -217,7 +244,13 @@ impl P25Channel {
                     self.voice(duid, &bits, &mut sink);
                 }
                 DUID_TDU | DUID_TDULC => self.end_call(&mut sink),
-                DUID_TSBK => self.since_control = Some(0),
+                DUID_TSBK => {
+                    self.since_control = Some(0);
+                    let bits = self.bits(start, offset, dibits);
+                    let blocks = self.control(&bits[2 * (NID_DIBITS - 1)..], &mut sink);
+                    // The frame is as long as the blocks it turned out to have.
+                    dibits = on_air(NID_DIBITS - 1 + blocks * TSBK_DIBITS);
+                }
                 _ => {}
             }
             // The next frame's sync may sit a sample or two early.
@@ -339,6 +372,41 @@ impl P25Channel {
         }
     }
 
+    /// Read a trunking frame's blocks, passing on what they say; returns
+    /// how many blocks the frame has.
+    fn control(&mut self, bits: &[u8], sink: &mut impl FnMut(P25Frame)) -> usize {
+        for (n, coded) in bits.as_chunks::<{ tsbk::CODED_BITS }>().0.iter().enumerate() {
+            // A garbled block leaves the rest of the frame unknown.
+            let Some(block) = tsbk::read(&tsbk::decode_block(coded)) else {
+                return n + 1;
+            };
+            for message in block.messages.into_iter().flatten() {
+                match message {
+                    tsbk::Message::Band { id, band } => self.bands[usize::from(id & 15)] = Some(band),
+                    tsbk::Message::Grant {
+                        talkgroup,
+                        channel,
+                        source,
+                    } => {
+                        // Until the band's numbering has been heard, the
+                        // channel number says nothing.
+                        if let Some(band) = self.bands[usize::from(channel >> 12)] {
+                            sink(P25Frame::Grant {
+                                talkgroup,
+                                freq_hz: band.frequency(channel & 0xfff),
+                                source,
+                            });
+                        }
+                    }
+                }
+            }
+            if block.last {
+                return n + 1;
+            }
+        }
+        TSBK_MOST
+    }
+
     fn end_call(&mut self, sink: &mut impl FnMut(P25Frame)) {
         if self.in_call {
             sink(P25Frame::End);
@@ -350,6 +418,12 @@ impl P25Channel {
         self.pending.clear();
         self.vocoder.reset();
     }
+}
+
+/// How many dibits it takes on air to carry `dibits` of a frame, counting
+/// the status symbol that follows every 35.
+fn on_air(dibits: usize) -> usize {
+    dibits + dibits / (STATUS_PERIOD - 1)
 }
 
 fn nid_codeword(info: u16) -> u64 {
@@ -411,6 +485,83 @@ mod tests {
         // Eleven bit errors, some of them in the NAC and DUID themselves.
         assert_eq!(decode_nid(on_air ^ 0x1410_0408_8011_2240), Some((0x38d, DUID_LDU1)));
         assert_eq!(decode_nid(on_air ^ 0xffff_ff00_0000_0000), None);
+    }
+
+    /// Baseband for a run of dibits: the phase turns by each dibit's angle
+    /// over its symbol, which is all the receiver looks at.
+    fn modulate(dibits: &[u8]) -> Vec<Complex32> {
+        let mut phase = 0.0f32;
+        let mut samples = Vec::with_capacity(dibits.len() * SPS);
+        for &dibit in dibits {
+            let turn = [1.0, 3.0, -1.0, -3.0][usize::from(dibit)] * FRAC_PI_4;
+            for _ in 0..SPS {
+                phase += turn / SPS as f32;
+                samples.push(Complex32::from_polar(0.5, phase));
+            }
+        }
+        samples
+    }
+
+    /// A trunking frame as sent: sync, network ID, the blocks, and a status
+    /// symbol after every 35 dibits.
+    fn trunking_frame(nac: u16, blocks: &[[u8; 12]]) -> Vec<u8> {
+        let mut bits: Vec<u8> = (0..48).map(|k| (0x5575_F5FF_77FFu64 >> (47 - k) & 1) as u8).collect();
+        let nid = nid_codeword(nac << 4 | u16::from(DUID_TSBK)) << 1;
+        bits.extend((0..64).map(|k| (nid >> (63 - k) & 1) as u8));
+        for block in blocks {
+            bits.extend(tsbk::tests::encode_block(block));
+        }
+        let mut dibits = Vec::new();
+        for pair in bits.chunks(2) {
+            dibits.push(pair[0] << 1 | pair[1]);
+            if dibits.len() % STATUS_PERIOD == STATUS_PERIOD - 1 {
+                dibits.push(0);
+            }
+        }
+        dibits
+    }
+
+    #[test]
+    fn follows_a_control_channel() {
+        // The system's band 1 starts at 851.00625 MHz, 6.25 kHz a channel.
+        let base = (851_006_250u32 / 5).to_be_bytes();
+        let band = tsbk::tests::block([0x3d, 0, 0x1c, 0xda, 0x80, 50, base[0], base[1], base[2], base[3], 0, 0]);
+        // Talkgroup 865 is given channel 100 of band 1, for radio 0xABCD;
+        // and, in one frame of two blocks, an update and the band again.
+        let grant = tsbk::tests::block([0x80, 0, 0, 0x10, 100, 0x03, 0x61, 0, 0xab, 0xcd, 0, 0]);
+        let update = tsbk::tests::block([0x02, 0, 0x10, 104, 0x03, 0x62, 0x10, 104, 0x03, 0x62, 0, 0]);
+        let mut last_band = band;
+        last_band[0] |= 0x80;
+        let last_band = tsbk::tests::block(last_band);
+
+        let mut dibits = vec![0u8; 40];
+        // A grant before the band is known can't be placed.
+        dibits.extend(trunking_frame(0x38d, &[grant]));
+        dibits.extend(trunking_frame(0x38d, &[update, last_band]));
+        dibits.extend(trunking_frame(0x38d, &[grant]));
+        dibits.extend(trunking_frame(0x38d, &[update, last_band]));
+        dibits.extend(vec![0u8; 400]);
+
+        let mut channel = P25Channel::new();
+        let mut grants = Vec::new();
+        for block in modulate(&dibits).chunks(48) {
+            channel.process(block, |frame| {
+                if let P25Frame::Grant {
+                    talkgroup,
+                    freq_hz,
+                    source,
+                } = frame
+                {
+                    grants.push((talkgroup, freq_hz, source));
+                }
+            });
+        }
+        assert!(channel.is_control());
+        assert!(!channel.signal_present() || !channel.level.floor().is_finite());
+        assert_eq!(
+            grants,
+            [(865, 851_631_250.0, Some(0xabcd)), (866, 851_656_250.0, None),]
+        );
     }
 
     #[test]

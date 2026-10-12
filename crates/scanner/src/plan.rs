@@ -11,6 +11,9 @@ pub enum Kind {
     Analog {
         freq_hz: f64,
         tone_hz: Option<f32>,
+        /// DCS code needed instead of a tone: its three octal digits as a
+        /// number (code 023 is 0o023).
+        dcs: Option<u16>,
         narrow: bool,
     },
     /// A P25 channel on its own frequency (conventional, not trunked),
@@ -106,6 +109,48 @@ impl Plan {
         }
         plan.add_other_talkgroups();
         Ok((plan, notes))
+    }
+
+    /// The plan as text in this program's own channel-file format, which
+    /// [`parse`](Self::parse) reads back: for editing a system as a whole.
+    pub fn to_text(&self) -> String {
+        let mut text = String::new();
+        for f in &self.p25 {
+            text.push_str(&format!("p25, {:.5}\n", f.freq_hz / 1e6));
+        }
+        for e in &self.entries {
+            // The name can't hold a comma: the description is what follows it.
+            let tag = e.tag.replace(',', " ");
+            let (tag, desc) = (tag.trim(), e.desc.trim());
+            let line = match e.kind {
+                Kind::Analog {
+                    freq_hz,
+                    tone_hz,
+                    dcs,
+                    narrow,
+                } => {
+                    let squelch = match squelch_text(tone_hz, dcs) {
+                        none if none.is_empty() => "-".to_string(),
+                        squelch => squelch,
+                    };
+                    format!(
+                        "{:.4}, {squelch}, {}, {tag}, {desc}",
+                        freq_hz / 1e6,
+                        if narrow { 'n' } else { 'w' }
+                    )
+                }
+                Kind::Digital { freq_hz, nac } => {
+                    let nac = nac.map_or("-".to_string(), |nac| format!("{nac:03X}"));
+                    format!("{:.4}, {nac}, p25, {tag}, {desc}", freq_hz / 1e6)
+                }
+                Kind::Talkgroup { id, .. } => format!("tg, {id}, {tag}, {desc}"),
+                // Made afresh whenever the text is read.
+                Kind::OtherTalkgroups { .. } => continue,
+            };
+            text.push_str(line.trim_end_matches([' ', ',']));
+            text.push('\n');
+        }
+        text
     }
 
     /// Give every P25 system a catch-all entry after its talkgroups.
@@ -297,10 +342,8 @@ fn native(text: &str, name: &str) -> Result<Plan, String> {
                     plan.entries.push(entry(Kind::Digital { freq_hz, nac }, tag, desc));
                     continue;
                 }
-                let tone_hz = match cols[1] {
-                    "" | "-" => None,
-                    t => Some(t.parse().map_err(|_| bad("bad CTCSS tone"))?),
-                };
+                let (tone_hz, dcs) =
+                    parse_squelch(cols[1]).ok_or_else(|| bad("bad CTCSS tone or DCS code (like 114.8 or D023)"))?;
                 let narrow = match cols[2] {
                     "n" => true,
                     "w" => false,
@@ -310,6 +353,7 @@ fn native(text: &str, name: &str) -> Result<Plan, String> {
                     Kind::Analog {
                         freq_hz: mhz(cols[0])?,
                         tone_hz,
+                        dcs,
                         narrow,
                     },
                     tag,
@@ -369,6 +413,34 @@ pub(crate) fn count_note(notes: &mut Vec<String>, count: usize, what: &str) {
 /// mode ("FM", "FMN", "P25"...) and tone ("114.8 PL", "CSQ", "023 DPL",
 /// "293 NAC" or nothing), and whether it uses a digital squelch code this
 /// scanner can't check. `None` for modes that can't be received.
+/// Read what an analog channel needs to hear to open, as it is written in
+/// channel files and typed into the editor: nothing (or "-") for any
+/// signal, a CTCSS tone in Hz ("114.8"), or a DCS code ("D023"). Returns
+/// (tone, code), or `None` if it is none of those.
+pub fn parse_squelch(text: &str) -> Option<(Option<f32>, Option<u16>)> {
+    let text = text.trim();
+    if text.is_empty() || text == "-" {
+        return Some((None, None));
+    }
+    if let Some(code) = text.strip_prefix(['D', 'd']) {
+        // Some lists add N for normal; inverted codes are heard as well.
+        let code = code.trim_end_matches(['N', 'n', 'I', 'i']);
+        let code = u16::from_str_radix(code, 8).ok().filter(|_| code.len() == 3)?;
+        return Some((None, Some(code)));
+    }
+    let tone: f32 = text.parse().ok()?;
+    (tone > 0.0).then_some((Some(tone), None))
+}
+
+/// How a tone or DCS code is written: "114.8", "D023", or nothing.
+pub fn squelch_text(tone_hz: Option<f32>, dcs: Option<u16>) -> String {
+    match (tone_hz, dcs) {
+        (_, Some(code)) => format!("D{code:03o}"),
+        (Some(tone), None) => tone.to_string(),
+        (None, None) => String::new(),
+    }
+}
+
 pub(crate) fn conventional_kind(mode: &str, tone: &str, freq_hz: f64) -> Option<(Kind, bool)> {
     let (mode, tone) = (mode.trim().to_ascii_uppercase(), tone.trim().to_ascii_uppercase());
     match mode.as_str() {
@@ -377,16 +449,23 @@ pub(crate) fn conventional_kind(mode: &str, tone: &str, freq_hz: f64) -> Option<
             Some((Kind::Digital { freq_hz, nac }, false))
         }
         "FM" | "FMN" => {
-            let (tone_hz, coded) = match tone.split_once(' ') {
-                Some((hz, "PL")) => (hz.parse().ok(), false),
-                Some(_) => (None, true),
-                None => (None, false),
+            // "114.8 PL" is a tone and "023 DPL" a DCS code; anything else
+            // is a kind of squelch that can't be told apart here.
+            let (tone_hz, dcs, coded) = match tone.split_once(' ') {
+                Some((hz, "PL")) => (hz.parse().ok(), None, false),
+                Some((code, "DPL")) => match u16::from_str_radix(code, 8) {
+                    Ok(code) if code <= 0o777 => (None, Some(code), false),
+                    _ => (None, None, true),
+                },
+                Some(_) => (None, None, true),
+                None => (None, None, false),
             };
             let narrow = mode == "FMN";
             Some((
                 Kind::Analog {
                     freq_hz,
                     tone_hz,
+                    dcs,
                     narrow,
                 },
                 coded,
@@ -506,7 +585,7 @@ mod tests {
         assert_eq!(plan.entries.len(), 4);
         assert!(matches!(plan.entries[3].kind, Kind::Digital { nac: Some(0x293), .. }));
         assert!(
-            matches!(plan.entries[0].kind, Kind::Analog { freq_hz, tone_hz: Some(t), narrow: false } if freq_hz == 488.3125e6 && t == 114.8)
+            matches!(plan.entries[0].kind, Kind::Analog { freq_hz, tone_hz: Some(t), narrow: false, .. } if freq_hz == 488.3125e6 && t == 114.8)
         );
         assert_eq!(plan.entries[0].desc, "Dispatch, primary");
         assert!(matches!(
@@ -517,8 +596,38 @@ mod tests {
                 ..
             }
         ));
-        assert!(matches!(plan.entries[2].kind, Kind::Analog { tone_hz: None, .. }));
-        assert_eq!(notes.len(), 2);
+        // A digital squelch code is read as one, and no longer remarked on.
+        assert!(matches!(
+            plan.entries[2].kind,
+            Kind::Analog {
+                tone_hz: None,
+                dcs: Some(0o023),
+                ..
+            }
+        ));
+        assert_eq!(notes.len(), 1);
+    }
+
+    #[test]
+    fn reads_dcs_codes() {
+        let (plan, _) = Plan::parse("460.1375, D624, n, Juvenile Hall, Los Guilicos\n", "test", None).unwrap();
+        assert!(matches!(
+            plan.entries[0].kind,
+            Kind::Analog {
+                tone_hz: None,
+                dcs: Some(0o624),
+                ..
+            }
+        ));
+        assert_eq!(parse_squelch("d023n"), Some((None, Some(0o023))));
+        assert_eq!(parse_squelch("114.8"), Some((Some(114.8), None)));
+        assert_eq!(parse_squelch(" - "), Some((None, None)));
+        assert_eq!(parse_squelch("D99"), None);
+        assert_eq!(parse_squelch("D089"), None);
+        assert_eq!(squelch_text(None, Some(0o023)), "D023");
+        // RadioReference writes them "624 DPL".
+        let (kind, unsupported) = conventional_kind("FMN", "624 DPL", 460.1375e6).unwrap();
+        assert!(matches!(kind, Kind::Analog { dcs: Some(0o624), .. }) && !unsupported);
     }
 
     #[test]

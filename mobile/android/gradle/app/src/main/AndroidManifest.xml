@@ -61,6 +61,13 @@
 
         <!-- Helper activities gpui-mobile uses for file pickers, runtime
              permissions and biometric prompts. -->
+        <!-- Importing and editing systems, with Android's own text fields. -->
+        <activity
+            android:name="com.fairhouse.dmps.SystemEditor"
+            android:exported="false"
+            android:theme="@android:style/Theme.DeviceDefault"
+            android:windowSoftInputMode="adjustResize"
+        />
         <activity
             android:name="dev.gpui.mobile.GpuiPickerActivity"
             android:exported="false"

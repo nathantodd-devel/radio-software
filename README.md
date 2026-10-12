@@ -43,10 +43,13 @@ It ships with channel lists for San Mateo County, California, and can import any
 
 - **Wideband reception.** One tuning covers every channel in the band; all of them are
   demodulated in parallel.
-- **Analog FM** with CTCSS (PL) tone squelch, so departments sharing a frequency are told apart.
+- **Analog FM** with CTCSS (PL) tone squelch and DCS (DPL) digital-coded squelch, so departments
+  sharing a frequency are told apart.
 - **P25 Phase 1** voice, both trunked systems and conventional channels. On a trunked system
-  it listens to every site frequency and reads the talkgroup from each call, so it does not
-  need to follow the control channel. Encrypted calls are skipped.
+  it listens to every site frequency and reads the talkgroup from each call. When a receiver
+  can't take in all of a system's frequencies at once (an RTL-SDR, say), it follows the control
+  channel instead: it waits there and goes to each call's frequency as the call is announced.
+  Encrypted calls are skipped.
 - **Three scan modes:** receive one band; hop between bands when the selected systems are too
   far apart; or scan one channel at a time at a low sample rate for less CPU and USB load.
 - **Two kinds of receiver:** Airspy R2 and Mini, and RTL-SDR dongles (RTL2832U with an R820T2
@@ -83,10 +86,14 @@ This is a young project. What has and has not been exercised:
 | Web version (`scanner-web`) | Tested on air with Chrome on Linux, driven by script: live data, controls, replay and audio delivery. Sound has not been listened to by a person; other browsers, phones and touch scrolling are untested |
 | Android app | Builds and draws on a Pixel 10; receiving is untested with either an Airspy or an RTL-SDR attached |
 | Several receivers at once | Tested with two and three simulated receivers; never run with two real radios. Both are processed on one CPU core, so two radios at 10 MSPS may be more than a slower computer keeps up with |
-| RTL-SDR | Driver written and the engine tested at its sample rates with synthetic signals; never run with a real dongle |
+| RTL-SDR | Tested on air with an R820T dongle on Linux: analog FM and P25 Phase 1 |
+| P25 control-channel following | Tested on air on the San Mateo County system with an RTL-SDR: grants decode and the receiver goes to the calls |
+| DCS squelch | Tested with synthetic signals only; never tried on a real DCS channel |
+| Editing and importing in the web page | Tested in Chrome on Linux, driven by script |
+| Editing and importing in the Android app | Builds; never run |
 | Airspy Mini | Should work (sample rates are read from the device); untested |
 
-Not supported: P25 Phase 2, DMR, NXDN, DCS (digital squelch codes), other SDR hardware, and
+Not supported: P25 Phase 2, DMR, NXDN, other SDR hardware, and
 RTL-SDR direct sampling (HF).
 
 ## Requirements
@@ -303,7 +310,9 @@ Things to know:
   ```
 
   (with the address other devices reach this computer at).
-- Channels are added and edited with the desktop app or the command line, not from the page.
+- **Import…** above the systems adds one from a channel file (pasted, or loaded from a file), and
+  **Edit** on a system changes its name, its county and its channels, as text in the channel-file
+  format. A system can be removed there too.
 
 ## The channel database
 
@@ -318,6 +327,12 @@ Channels live in a SQLite file, `dmps/channels.db`, in your user data directory:
 A new database starts with three systems for San Mateo County, California: Police, Fire and
 the County P25 system.
 
+**Counties.** Every system belongs to a county, and the lists show them county by county. An
+import says which county it joins (`--county` on the command line, the County field in the
+apps); a county is made the first time it is named and forgotten when its last system goes.
+`scanner counties` lists them, and `scanner remove-county NAME` removes one with all its systems.
+A database opened by this version can't be opened by versions before it.
+
 **Portable mode:** if a folder named `dmps` exists beside the executable, the
 database, themes and kept recordings go there instead. Create the folder yourself to opt in.
 
@@ -330,7 +345,7 @@ upgrading; rename it to `dmps` whenever you like.
 ### From a file
 
 ```sh
-scanner import channels.csv --name "City Police" --location "Somewhere, ST"
+scanner import channels.csv --name "City Police" --county "Some County, ST"
 ```
 
 or **Import…** in the app. Two kinds of file are understood.
@@ -338,7 +353,7 @@ or **Import…** in the app. Two kinds of file are understood.
 **This program's own CSV format**, one channel per line:
 
 ```
-# analog FM: frequency in MHz, CTCSS tone in Hz (or -), w (wide) or n (narrow), name, description
+# analog FM: frequency in MHz, CTCSS tone in Hz or DCS code like D023 (or -), w (wide) or n (narrow), name, description
 488.3125, 114.8, w, San Mateo PD1, San Mateo Police Dispatch
 
 # P25 conventional channel: frequency, NAC in hex (or -), p25, name, description

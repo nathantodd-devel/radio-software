@@ -11,6 +11,7 @@ use scanner::db::{Db, System};
 use scanner::engine::{self, Config, ScanMode, Source, UsbDevice};
 use scanner::session::{History, Live, Session};
 
+use crate::editor::{self, Edit};
 use crate::usb::{self, Opened};
 
 // Matches `gpui_surface` in the Android resources, so the splash screen
@@ -60,6 +61,8 @@ pub struct ScannerApp {
     systems: Vec<System>,
     /// Systems being scanned together, in the order they were picked.
     selected: Vec<i64>,
+    /// What went wrong with the last import or edit, if anything did.
+    edit_problem: String,
     /// The radios Android has opened for the app; none until connected.
     radios: Vec<UsbDevice>,
     /// The sample rates the receiver offers, once it has been asked.
@@ -100,6 +103,7 @@ impl ScannerApp {
                 .split(',')
                 .filter_map(|id| id.parse().ok())
                 .collect(),
+            edit_problem: String::new(),
             radios: Vec::new(),
             rates: Vec::new(),
             session: None,
@@ -130,7 +134,11 @@ impl ScannerApp {
         cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(REFRESH).await;
-                if this.update(cx, |_, cx| cx.notify()).is_err() {
+                let updated = this.update(cx, |this, cx| {
+                    this.apply_edits();
+                    cx.notify();
+                });
+                if updated.is_err() {
                     break;
                 }
             }
@@ -592,14 +600,75 @@ impl ScannerApp {
             }))
     }
 
+    /// Do what was asked for in the system editor, if anything has been.
+    fn apply_edits(&mut self) {
+        while let Some(edit) = editor::take() {
+            let Some(db) = &mut self.db else { return };
+            let done = match edit {
+                Edit::Save { id, name, county, text } => {
+                    let name = match name.trim() {
+                        "" => "Imported",
+                        name => name,
+                    };
+                    scanner::plan::Plan::parse(&text, name, None).and_then(|(plan, _)| match id {
+                        Some(id) => db.replace_system(id, name, &county, &plan),
+                        None => db.add_system(name, &county, &plan).map(|_| ()),
+                    })
+                }
+                Edit::Remove { id } => db.remove_system(id),
+            };
+            // What went wrong is shown above the systems; nothing is lost,
+            // but the editor has to be opened again.
+            self.edit_problem = done.err().unwrap_or_default();
+            self.reload_systems();
+            self.start();
+        }
+    }
+
+    /// Open the editor on a system, or on a new one.
+    fn edit_system(&self, id: Option<i64>) {
+        let Some(db) = &self.db else { return };
+        let counties: Vec<String> = db.counties().unwrap_or_default().into_iter().map(|k| k.name).collect();
+        let system = id.and_then(|id| self.systems.iter().find(|s| s.id == id));
+        let text = system
+            .and_then(|s| db.plan(&[s.id]).ok())
+            .map(|plan| plan.to_text())
+            .unwrap_or_default();
+        let (name, county) = system.map_or(("", ""), |s| (s.name.as_str(), s.location.as_str()));
+        editor::open(id, name, county, &text, &counties);
+    }
+
     fn systems(&self, cx: &mut Context<Self>) -> Stateful<Div> {
-        let mut list = scroller("systems");
+        let mut list = scroller("systems").child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .px_4()
+                .pt_3()
+                .child(heading("Systems"))
+                .child(
+                    button("import", "Import…", false, ACCENT).on_click(cx.listener(|this, _, _, _| {
+                        this.edit_system(None);
+                    })),
+                ),
+        );
+        if !self.edit_problem.is_empty() {
+            list = list.child(
+                div()
+                    .px_4()
+                    .py_2()
+                    .text_sm()
+                    .text_color(rgb(ERROR))
+                    .child(self.edit_problem.clone()),
+            );
+        }
         let mut location = None;
         for system in &self.systems {
             if location != Some(&system.location) {
                 location = Some(&system.location);
                 let title = if system.location.is_empty() {
-                    "Systems".to_string()
+                    "No county".to_string()
                 } else {
                     system.location.clone()
                 };
@@ -648,12 +717,21 @@ impl ScannerApp {
                                     .child(system.name.clone()),
                             )
                             .child(div().text_sm().truncate().text_color(rgb(MUTED)).child(summary)),
+                    )
+                    .child(
+                        button(("edit-system", id as usize), "Edit", false, ACCENT).on_click(cx.listener(
+                            move |this, _, _, cx| {
+                                // Not also a tap on the row, which selects it.
+                                cx.stop_propagation();
+                                this.edit_system(Some(id));
+                            },
+                        )),
                     ),
             );
         }
         list.child(note(
             "Tap a system to scan it; pick several to scan them together. \
-             Systems are added and edited with the desktop app or the command-line tool.",
+             Import adds one from a channel file; Edit changes its name, county and channels.",
         ))
     }
 

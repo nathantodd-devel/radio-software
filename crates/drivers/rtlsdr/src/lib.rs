@@ -32,6 +32,9 @@ const READ_BYTES: u32 = 65_536;
 /// Sample rates worth offering, fastest first. The RTL2832U manages up to
 /// 3.2 MSPS on paper, but above 2.4 most computers' USB drops samples.
 const SAMPLE_RATES: [u32; 3] = [2_400_000, 2_048_000, 1_024_000];
+/// Where a device is tuned between being opened and being told where to
+/// go: anywhere every tuner can reach.
+const IDLE_FREQUENCY_HZ: u32 = 100_000_000;
 
 /// The USB (vendor, product) ids of the dongles librtlsdr knows: its
 /// `known_devices` table, as of the version in vendor/librtlsdr.
@@ -231,6 +234,12 @@ impl RtlSdr {
     /// Wrap a device that has just been opened.
     fn opened(lib: Lib, device: *mut c_void, name: &str) -> Self {
         let handle = Arc::new(Handle { lib, device });
+        // Setting the sample rate retunes to the frequency in use, which
+        // until one is chosen is 0 Hz: the tuner can't lock to that, and
+        // the library says so ("PLL not locked!") every time a scan starts.
+        // Somewhere real to be until the scanner tunes it avoids that.
+        // SAFETY: `device` is open.
+        unsafe { (handle.lib.set_center_freq)(device, IDLE_FREQUENCY_HZ) };
         // SAFETY: `device` is open.
         let tuner = match unsafe { (handle.lib.get_tuner_type)(device) } {
             1 => "E4000",

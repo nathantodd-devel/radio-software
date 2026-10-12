@@ -42,6 +42,9 @@ const RETUNE_SETTLE_SECS: f64 = 0.1;
 /// isn't at the centre of the passband, where the tuner's own leakage lands.
 const CHANNEL_CHECK_SECS: f32 = 0.05;
 const CHANNEL_OFFSET_HZ: f64 = 300_000.0;
+/// How near a frequency a control channel names must be to one in the plan
+/// to be taken as that one.
+const GRANT_MATCH_HZ: f64 = 1_000.0;
 
 /// Where the samples come from.
 #[derive(Clone)]
@@ -750,6 +753,11 @@ struct Tuner {
     idle_blocks: u32,
     /// Blocks spent on the tuned band this turn.
     turn_blocks: u32,
+    /// A band a control channel has just said a wanted call is on.
+    jump: Option<usize>,
+    /// The band to go back to after following a call: the control
+    /// channel's.
+    return_to: Option<usize>,
 }
 
 /// Receive until the input ends or [`Controls::stop`] is called.
@@ -811,6 +819,9 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
         .filter(|(_, share)| !share.is_empty())
         .collect();
     let mut layouts = Vec::new();
+    // Every trunked system's frequencies, and the (receiver, band) each is
+    // listened to on: where a call the control channel announces will be.
+    let mut trunked_at: Vec<(i64, f64, usize, usize)> = Vec::new();
     for (t, (found, share)) in used.iter().enumerate() {
         let mut bands: Vec<Band> = Vec::new();
         for (b, tuning) in share.iter().enumerate() {
@@ -821,12 +832,15 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
                     Listener::Row(row) => {
                         row_place[row] = Some((t, b));
                         match plan.entries[row].kind {
-                            Kind::Analog { tone_hz, narrow, .. } => Rx::Nfm {
+                            Kind::Analog {
+                                tone_hz, dcs, narrow, ..
+                            } => Rx::Nfm {
                                 channel: Box::new(NfmChannel::new(NfmConfig {
                                     sample_rate: CHANNEL_RATE,
                                     block_len,
                                     max_deviation: if narrow { 2500.0 } else { 5000.0 },
                                     tone_hz,
+                                    dcs,
                                     squelch: 10f32.powf(squelch_db / 10.0),
                                 })),
                                 row,
@@ -847,6 +861,7 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
                                 row_place[row] = Some((t, b));
                             }
                         }
+                        trunked_at.push((system, freq_hz, t, b));
                         Rx::P25(Box::new(P25Rx {
                             system,
                             ..P25Rx::default()
@@ -899,6 +914,8 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
             ready: false,
             idle_blocks: 0,
             turn_blocks: 0,
+            jump: None,
+            return_to: None,
         });
     }
 
@@ -943,6 +960,10 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
     for (t, tuner) in tuners.iter().enumerate() {
         announce(t, tuner, &mut on_event);
     }
+
+    // Calls announced by control channels in the block being worked on:
+    // (system, talkgroup, frequency).
+    let mut grants: Vec<(i64, u16, f64)> = Vec::new();
 
     'scan: while !controls.stop.load(Relaxed) {
         // The same stretch of time from every receiver.
@@ -1006,6 +1027,13 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
                             }
                         }
                         P25Frame::End => rx.ended = true,
+                        // A control channel saying where a call is. Only
+                        // a trunked system's own is listened to.
+                        P25Frame::Grant { talkgroup, freq_hz, .. } => {
+                            if rx.fixed.is_none() {
+                                grants.push((rx.system, talkgroup, freq_hz));
+                            }
+                        }
                     }
                 }
                 let Some(row) = rx.row else {
@@ -1024,6 +1052,20 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
                         open[row] = !controls.skipped(row);
                     }
                 }
+            }
+        }
+
+        // A wanted call announced on a frequency that a receiver isn't on at
+        // the moment: that receiver is sent there.
+        for (system, talkgroup, freq_hz) in grants.drain(..) {
+            let wanted = talkgroup_row(system, Some(talkgroup)).is_some_and(|row| !controls.skipped(row));
+            let place = trunked_at
+                .iter()
+                .find(|at| at.0 == system && (at.1 - freq_hz).abs() < GRANT_MATCH_HZ);
+            if let (true, Some(&(_, _, t, band))) = (wanted, place)
+                && tuners[t].tuned != band
+            {
+                tuners[t].jump = Some(band);
             }
         }
 
@@ -1209,13 +1251,49 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
                     Rx::P25(rx) => rx.fixed.is_none_or(|(row, _)| !controls.skipped(row)),
                 })
             };
-            let next = match held {
-                Some((_, band)) => band,
-                None if tuner.idle_blocks >= dwell_blocks || overstayed || empty => (1..tuner.bands.len())
-                    .map(|step| (tuner.tuned + step) % tuner.bands.len())
+            // The trunked systems whose control channel is on this band. If
+            // every other band is only more of those systems' frequencies,
+            // there is no reason to leave: the control channel says when
+            // there is something on them.
+            let controlled: Vec<i64> = band
+                .rxs
+                .iter()
+                .filter_map(|rx| match rx {
+                    Rx::P25(rx) if rx.fixed.is_none() && rx.channel.is_control() => Some(rx.system),
+                    _ => None,
+                })
+                .collect();
+            let only_controlled = |other: &Band| {
+                other
+                    .rxs
+                    .iter()
+                    .all(|rx| matches!(rx, Rx::P25(rx) if rx.fixed.is_none() && controlled.contains(&rx.system)))
+            };
+            let tuned = tuner.tuned;
+            let parked = !controlled.is_empty()
+                && tuner
+                    .bands
+                    .iter()
+                    .enumerate()
+                    .all(|(b, other)| b == tuned || only_controlled(other));
+            // A call being played isn't dropped for one just announced.
+            let jump = tuner.jump.take().filter(|_| !playing.is_some_and(here));
+            let leaving = tuner.idle_blocks >= dwell_blocks || overstayed || empty;
+            let next = match (held, jump) {
+                (Some((_, band)), _) => band,
+                (None, Some(band)) => {
+                    if !controlled.is_empty() {
+                        tuner.return_to = Some(tuned);
+                    }
+                    band
+                }
+                // After following a call, straight back to the control channel.
+                (None, None) if leaving && tuner.return_to.is_some() => tuner.return_to.take().unwrap_or(tuned),
+                (None, None) if leaving && !parked => (1..tuner.bands.len())
+                    .map(|step| (tuned + step) % tuner.bands.len())
                     .find(|&band| wanted(&tuner.bands[band]))
-                    .unwrap_or(tuner.tuned),
-                None => tuner.tuned,
+                    .unwrap_or(tuned),
+                (None, None) => tuned,
             };
             if next == tuner.tuned {
                 continue;

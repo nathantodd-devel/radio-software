@@ -373,7 +373,12 @@ fn listen(mut stream: Box<dyn Stream>, socket: &TcpStream, head: &Head, hub: &Mu
             Ok(Message::Text(json)) => {
                 // Anything that isn't one of ours is ignored.
                 if let Ok(message) = serde_json::from_str::<ClientMessage>(&json) {
-                    hub.lock().unwrap().handle(message);
+                    let replies = hub.lock().unwrap().handle(message);
+                    for reply in replies {
+                        if send(socket, reply).is_err() {
+                            return;
+                        }
+                    }
                 }
             }
             Ok(Message::Close(_)) => return,

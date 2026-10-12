@@ -60,6 +60,17 @@ const MIGRATIONS: &[&str] = &[
         value TEXT NOT NULL
     );",
     "ALTER TABLE channels ADD COLUMN record INTEGER NOT NULL DEFAULT 0;",
+    // Counties own systems. They started as the text in `location`, which
+    // stays as it was for older versions of the program to read.
+    "CREATE TABLE counties (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE
+    );
+    INSERT INTO counties (name) SELECT DISTINCT location FROM systems WHERE location != '';
+    ALTER TABLE systems ADD COLUMN county_id INTEGER REFERENCES counties(id) ON DELETE CASCADE;
+    UPDATE systems SET county_id = (SELECT id FROM counties WHERE name = systems.location);",
+    // The DCS code an analog channel needs, if it needs one instead of a tone.
+    "ALTER TABLE channels ADD COLUMN dcs INTEGER;",
 ];
 
 const DATA_DIR: &str = "dmps";
@@ -74,11 +85,23 @@ const DB_FILE: &str = "channels.db";
 pub struct System {
     pub id: i64,
     pub name: String,
+    /// The name of the county it belongs to, or empty if it has none.
     pub location: String,
+    /// The county it belongs to.
+    pub county: Option<i64>,
     pub channels: usize,
     /// Lowest and highest frequency, in Hz.
     pub lo_hz: f64,
     pub hi_hz: f64,
+}
+
+/// A county: what owns the systems of one area.
+#[derive(Clone, Debug, PartialEq)]
+pub struct County {
+    pub id: i64,
+    pub name: String,
+    /// How many systems it has.
+    pub systems: usize,
 }
 
 pub struct Db {
@@ -94,10 +117,19 @@ fn columns(kind: &Kind) -> Option<(Option<f64>, Option<f32>, bool, Option<u16>, 
             freq_hz,
             tone_hz,
             narrow,
+            ..
         } => Some((Some(freq_hz), tone_hz, narrow, None, false, None)),
         Kind::Digital { freq_hz, nac } => Some((Some(freq_hz), None, false, None, true, nac)),
         Kind::Talkgroup { id, .. } => Some((None, None, false, Some(id), true, None)),
         Kind::OtherTalkgroups { .. } => None,
+    }
+}
+
+/// The DCS code a channel is stored with, kept in a column of its own.
+fn dcs(kind: &Kind) -> Option<u16> {
+    match *kind {
+        Kind::Analog { dcs, .. } => dcs,
+        _ => None,
     }
 }
 
@@ -162,25 +194,27 @@ impl Db {
         Ok(db)
     }
 
-    /// All systems, grouped by location.
+    /// All systems, county by county.
     pub fn systems(&self) -> Result<Vec<System>, String> {
         let mut stmt = sql(self.conn.prepare(
-            "SELECT s.id, s.name, s.location,
+            "SELECT s.id, s.name, COALESCE(k.name, ''), s.county_id,
                     (SELECT COUNT(*) FROM channels c WHERE c.system_id = s.id),
                     (SELECT MIN(f) FROM (SELECT freq_hz AS f FROM channels WHERE system_id = s.id
                                          UNION ALL SELECT freq_hz FROM p25_frequencies WHERE system_id = s.id)),
                     (SELECT MAX(f) FROM (SELECT freq_hz AS f FROM channels WHERE system_id = s.id
                                          UNION ALL SELECT freq_hz FROM p25_frequencies WHERE system_id = s.id))
-             FROM systems s ORDER BY s.location, s.id",
+             FROM systems s LEFT JOIN counties k ON k.id = s.county_id
+             ORDER BY COALESCE(k.name, ''), s.id",
         ))?;
         let rows = stmt.query_map([], |r| {
             Ok(System {
                 id: r.get(0)?,
                 name: r.get(1)?,
                 location: r.get(2)?,
-                channels: r.get::<_, i64>(3)? as usize,
-                lo_hz: r.get::<_, Option<f64>>(4)?.unwrap_or(0.0),
-                hi_hz: r.get::<_, Option<f64>>(5)?.unwrap_or(0.0),
+                county: r.get(3)?,
+                channels: r.get::<_, i64>(4)? as usize,
+                lo_hz: r.get::<_, Option<f64>>(5)?.unwrap_or(0.0),
+                hi_hz: r.get::<_, Option<f64>>(6)?.unwrap_or(0.0),
             })
         });
         sql(sql(rows)?.collect())
@@ -212,12 +246,101 @@ impl Db {
         }
     }
 
-    /// Store a plan's channels as a new system; returns the system's id.
+    /// The counties, by name, each with how many systems it has.
+    pub fn counties(&self) -> Result<Vec<County>, String> {
+        let mut stmt = sql(self.conn.prepare(
+            "SELECT k.id, k.name, (SELECT COUNT(*) FROM systems s WHERE s.county_id = k.id)
+             FROM counties k ORDER BY k.name",
+        ))?;
+        let rows = stmt.query_map([], |r| {
+            Ok(County {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                systems: r.get::<_, i64>(2)? as usize,
+            })
+        });
+        sql(sql(rows)?.collect())
+    }
+
+    /// The county with this name, made if there isn't one yet. Case and
+    /// space around the name don't matter; no name is no county.
+    pub fn county_named(&self, name: &str) -> Result<Option<i64>, String> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Ok(None);
+        }
+        let existing = self
+            .conn
+            .query_row("SELECT id FROM counties WHERE name = ?1 COLLATE NOCASE", [name], |r| {
+                r.get(0)
+            })
+            .optional();
+        if let Some(id) = sql(existing)? {
+            return Ok(Some(id));
+        }
+        sql(self.conn.execute("INSERT INTO counties (name) VALUES (?1)", [name]))?;
+        Ok(Some(self.conn.last_insert_rowid()))
+    }
+
+    /// Find a county by number, or by a name (or part of one) that only one
+    /// county has.
+    pub fn find_county(&self, what: &str) -> Result<County, String> {
+        let counties = self.counties()?;
+        if let Some(county) = what
+            .parse()
+            .ok()
+            .and_then(|id: i64| counties.iter().find(|k| k.id == id))
+        {
+            return Ok(county.clone());
+        }
+        let lower = what.to_lowercase();
+        let mut matches = counties.iter().filter(|k| k.name.to_lowercase().contains(&lower));
+        match (matches.next(), matches.next()) {
+            (Some(county), None) => Ok(county.clone()),
+            (None, _) => Err(format!("no county called {what:?}; `scanner counties` lists them")),
+            _ => Err(format!(
+                "{what:?} matches several counties; use its number from `scanner counties`"
+            )),
+        }
+    }
+
+    pub fn rename_county(&self, county: i64, name: &str) -> Result<(), String> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("a county needs a name".into());
+        }
+        sql(self
+            .conn
+            .execute("UPDATE counties SET name = ?2 WHERE id = ?1", params![county, name]))?;
+        sql(self.conn.execute(
+            "UPDATE systems SET location = ?2 WHERE county_id = ?1",
+            params![county, name],
+        ))
+        .map(|_| ())
+    }
+
+    /// Remove a county and every system in it.
+    pub fn remove_county(&mut self, county: i64) -> Result<(), String> {
+        sql(self.conn.execute("DELETE FROM counties WHERE id = ?1", [county])).map(|_| ())
+    }
+
+    /// Counties left with no systems are forgotten.
+    fn tidy_counties(&self) -> Result<(), String> {
+        sql(self.conn.execute(
+            "DELETE FROM counties WHERE NOT EXISTS (SELECT 1 FROM systems s WHERE s.county_id = counties.id)",
+            [],
+        ))
+        .map(|_| ())
+    }
+
+    /// Store a plan's channels as a new system in the county called
+    /// `location` (made if need be; none if empty). Returns the system's id.
     pub fn add_system(&mut self, name: &str, location: &str, plan: &Plan) -> Result<i64, String> {
+        let county = self.county_named(location)?;
         let tx = sql(self.conn.transaction())?;
         sql(tx.execute(
-            "INSERT INTO systems (name, location) VALUES (?1, ?2)",
-            params![name, location],
+            "INSERT INTO systems (name, location, county_id) VALUES (?1, ?2, ?3)",
+            params![name, location.trim(), county],
         ))?;
         let system = tx.last_insert_rowid();
         for (position, e) in plan.entries.iter().enumerate() {
@@ -245,6 +368,10 @@ impl Db {
                     e.record
                 ],
             ))?;
+            sql(tx.execute(
+                "UPDATE channels SET dcs = ?2 WHERE id = ?1",
+                params![tx.last_insert_rowid(), dcs(&e.kind)],
+            ))?;
         }
         for f in &plan.p25 {
             sql(tx.execute(
@@ -256,16 +383,73 @@ impl Db {
         Ok(system)
     }
 
-    pub fn remove_system(&mut self, system: i64) -> Result<(), String> {
-        sql(self.conn.execute("DELETE FROM systems WHERE id = ?1", [system])).map(|_| ())
+    /// Replace a system's name, county and channels with `plan`'s, as after
+    /// editing it as a whole. A channel that is still there (the same
+    /// frequency or talkgroup, under the same name) keeps its skip,
+    /// priority and record marks.
+    pub fn replace_system(&mut self, system: i64, name: &str, location: &str, plan: &Plan) -> Result<(), String> {
+        let before = self.plan(&[system])?;
+        let same = |a: &Entry, b: &Entry| {
+            a.tag == b.tag && columns(&a.kind) == columns(&b.kind) && dcs(&a.kind) == dcs(&b.kind)
+        };
+        self.rename_system(system, name, location)?;
+        let tx = sql(self.conn.transaction())?;
+        sql(tx.execute("DELETE FROM channels WHERE system_id = ?1", [system]))?;
+        sql(tx.execute("DELETE FROM p25_frequencies WHERE system_id = ?1", [system]))?;
+        for (position, e) in plan.entries.iter().enumerate() {
+            let Some((freq_hz, tone_hz, narrow, talkgroup, p25, nac)) = columns(&e.kind) else {
+                continue;
+            };
+            let kept = before.entries.iter().find(|old| same(old, e));
+            let (skip, priority, record) = kept.map_or((e.skip, e.priority, e.record), |old| {
+                (old.skip, old.priority, old.record)
+            });
+            sql(tx.execute(
+                "INSERT INTO channels
+                    (system_id, position, freq_hz, tone_hz, narrow, talkgroup, p25, nac, tag, description,
+                     skip, priority, record, dcs)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                params![
+                    system,
+                    position as i64,
+                    freq_hz,
+                    tone_hz,
+                    narrow,
+                    talkgroup,
+                    p25,
+                    nac,
+                    e.tag,
+                    e.desc,
+                    skip,
+                    priority,
+                    record,
+                    dcs(&e.kind)
+                ],
+            ))?;
+        }
+        for f in &plan.p25 {
+            sql(tx.execute(
+                "INSERT INTO p25_frequencies (system_id, freq_hz) VALUES (?1, ?2)",
+                params![system, f.freq_hz],
+            ))?;
+        }
+        sql(tx.commit())
     }
 
+    pub fn remove_system(&mut self, system: i64) -> Result<(), String> {
+        sql(self.conn.execute("DELETE FROM systems WHERE id = ?1", [system]))?;
+        self.tidy_counties()
+    }
+
+    /// Change a system's name and the county it belongs to (see
+    /// [`add_system`](Self::add_system)).
     pub fn rename_system(&self, system: i64, name: &str, location: &str) -> Result<(), String> {
+        let county = self.county_named(location)?;
         sql(self.conn.execute(
-            "UPDATE systems SET name = ?2, location = ?3 WHERE id = ?1",
-            params![system, name, location],
-        ))
-        .map(|_| ())
+            "UPDATE systems SET name = ?2, location = ?3, county_id = ?4 WHERE id = ?1",
+            params![system, name, location.trim(), county],
+        ))?;
+        self.tidy_counties()
     }
 
     /// The frequencies, in Hz, a system's P25 talkgroups are heard on.
@@ -317,6 +501,9 @@ impl Db {
                         id, freq_hz, tone_hz, narrow, talkgroup, p25, nac, e.tag, e.desc, e.skip, e.priority, e.record
                     ],
                 ))?;
+                sql(self
+                    .conn
+                    .execute("UPDATE channels SET dcs = ?2 WHERE id = ?1", params![id, dcs(&e.kind)]))?;
                 Ok(id)
             }
             None => {
@@ -331,7 +518,11 @@ impl Db {
                         e.record
                     ],
                 ))?;
-                Ok(self.conn.last_insert_rowid())
+                let id = self.conn.last_insert_rowid();
+                sql(self
+                    .conn
+                    .execute("UPDATE channels SET dcs = ?2 WHERE id = ?1", params![id, dcs(&e.kind)]))?;
+                Ok(id)
             }
         }
     }
@@ -427,7 +618,7 @@ impl Db {
                 return Err(format!("system {system} is no longer in the database"));
             }
             let mut stmt = sql(self.conn.prepare(
-                "SELECT id, freq_hz, tone_hz, narrow, talkgroup, tag, description, skip, p25, nac, priority, record
+                "SELECT id, freq_hz, tone_hz, narrow, talkgroup, tag, description, skip, p25, nac, priority, record, dcs
                  FROM channels WHERE system_id = ?1 ORDER BY position",
             ))?;
             let rows = stmt.query_map([system], |r| {
@@ -440,6 +631,7 @@ impl Db {
                     (Some(freq_hz), _) => Kind::Analog {
                         freq_hz,
                         tone_hz: r.get(2)?,
+                        dcs: r.get(12)?,
                         narrow: r.get(3)?,
                     },
                     (None, id) => Kind::Talkgroup {
@@ -478,6 +670,87 @@ impl Db {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_system_can_be_edited_as_text() {
+        let dir = std::env::temp_dir().join(format!("scanner-text-test-{}", std::process::id()));
+        let mut db = Db::open(&dir.join("channels.db")).unwrap();
+        let systems = db.systems().unwrap();
+        // Every starter system comes back from its own text unchanged.
+        for system in &systems {
+            let plan = db.plan(&[system.id]).unwrap();
+            let (again, _) = Plan::parse(&plan.to_text(), "text", None).unwrap();
+            assert_eq!(again.to_text(), plan.to_text(), "{}", system.name);
+            assert_eq!(again.entries.len(), plan.entries.len());
+        }
+        // Mark a channel, then edit the system: drop its second channel,
+        // add one with a DCS code, rename it and move it to another county.
+        let police = systems[0].id;
+        let plan = db.plan(&[police]).unwrap();
+        let (first, second) = (plan.entries[0].tag.clone(), plan.entries[1].tag.clone());
+        db.set_priority(plan.entries[0].channel_id.unwrap(), true).unwrap();
+        let mut lines: Vec<String> = plan.to_text().lines().map(str::to_string).collect();
+        lines.remove(1);
+        lines.push("460.1375, D624, n, Juvenile Hall, Los Guilicos".into());
+        let (edited, _) = Plan::parse(&lines.join("\n"), "text", None).unwrap();
+        db.replace_system(police, "Law", "Sonoma County, CA", &edited).unwrap();
+
+        let after = db.plan(&[police]).unwrap();
+        assert_eq!(after.entries.len(), plan.entries.len());
+        assert!(
+            after.entries[0].tag == first && after.entries[0].priority,
+            "the mark is kept"
+        );
+        assert!(after.entries.iter().all(|e| e.tag != second));
+        assert!(matches!(
+            after.entries.last().unwrap().kind,
+            Kind::Analog { dcs: Some(0o624), .. }
+        ));
+        let system = db.find("law").unwrap();
+        assert_eq!(system.location, "Sonoma County, CA");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn counties_own_their_systems() {
+        let dir = std::env::temp_dir().join(format!("scanner-county-test-{}", std::process::id()));
+        let mut db = Db::open(&dir.join("channels.db")).unwrap();
+        // The starter systems' county, made from their location.
+        let counties = db.counties().unwrap();
+        assert_eq!(counties.len(), 1);
+        assert_eq!(
+            (counties[0].name.as_str(), counties[0].systems),
+            ("San Mateo County, CA", 3)
+        );
+
+        // An import says which county it belongs to: a new one is made, an
+        // existing one is joined whatever the capitals.
+        let (plan, _) = Plan::parse("453.725, 131.8, n, SCSO 1, Dispatch\n", "t", None).unwrap();
+        let police = db.add_system("Police", " Sonoma County, CA ", &plan).unwrap();
+        let fire = db.add_system("Fire", "sonoma county, ca", &plan).unwrap();
+        let sonoma = db.find_county("sonoma").unwrap();
+        assert_eq!((sonoma.name.as_str(), sonoma.systems), ("Sonoma County, CA", 2));
+        let system = |db: &Db, id| db.systems().unwrap().into_iter().find(|s| s.id == id).unwrap();
+        assert_eq!(system(&db, fire).county, Some(sonoma.id));
+        assert_eq!(system(&db, fire).location, "Sonoma County, CA");
+
+        // Renaming the county renames it for all its systems; moving the
+        // last system out of a county forgets the county.
+        db.rename_county(sonoma.id, "Sonoma").unwrap();
+        assert_eq!(system(&db, police).location, "Sonoma");
+        db.rename_system(police, "Police", "Marin County, CA").unwrap();
+        db.rename_system(fire, "Fire", "").unwrap();
+        let names: Vec<String> = db.counties().unwrap().into_iter().map(|k| k.name).collect();
+        assert_eq!(names, ["Marin County, CA", "San Mateo County, CA"]);
+        assert_eq!(system(&db, fire).county, None);
+
+        // Removing a county removes what it owns.
+        let marin = db.find_county("marin").unwrap();
+        db.remove_county(marin.id).unwrap();
+        assert!(db.systems().unwrap().iter().all(|s| s.id != police));
+        assert!(db.find_county("marin").is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn starter_systems_round_trip() {
@@ -545,6 +818,7 @@ mod tests {
         let fm = |freq_hz| Kind::Analog {
             freq_hz,
             tone_hz: None,
+            dcs: None,
             narrow: true,
         };
         let a = db.save_channel(edited, &channel("A", fm(155.0e6))).unwrap();

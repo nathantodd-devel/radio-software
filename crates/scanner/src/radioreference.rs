@@ -370,7 +370,8 @@ mod tests {
             &mut coded,
         )
         .unwrap();
-        assert_eq!((plan.entries.len(), left_out, coded), (3, 2, 1));
+        assert_eq!((plan.entries.len(), left_out, coded), (3, 2, 0));
+        assert!(matches!(plan.entries[1].kind, Kind::Analog { dcs: Some(0o023), .. }));
         assert!(matches!(plan.entries[0].kind, Kind::Analog { tone_hz: Some(t), .. } if t == 114.8));
         assert_eq!(plan.entries[1].tag, "Car to car");
         assert!(matches!(plan.entries[2].kind, Kind::Digital { nac: Some(0x293), .. }));

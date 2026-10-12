@@ -5,9 +5,9 @@
 #
 # Rohnert Park's police are on VHF: see sonoma-fire.csv. The City of Sonoma
 # and Windsor are policed by the Sheriff.
-# Left out: encrypted P25 channels (Sheriff 2 Records, Santa Rosa PD5),
-# channels using digital squelch codes (juvenile hall, most of Santa Rosa
-# Junior College), and channels listed without a tone (SWAT, investigations).
+# The tone column is a CTCSS tone in Hz or a DCS code (D624).
+# Left out: encrypted P25 channels (Sheriff 2 Records, Santa Rosa PD5) and
+# channels listed without a tone (SWAT, investigations).
 
 # Dispatch
 453.7250, 131.8, n, SCSO 1 Dispatch,   Sheriff Dispatch
@@ -42,6 +42,14 @@
 460.1750, 192.8, n, SCSO MADF 1,       Main Adult Detention Facility 1
 460.4750, 127.3, n, SCSO MADF 2,       Main Adult Detention Facility 2
 460.4250, 103.5, n, SCSO NCDF,         North County Detention Facility
+460.1375, D624,  n, SCSO JuvHall,      Los Guilicos (Juvenile Hall)
+
+# Santa Rosa Junior College police
+460.4000, D032,  n, SRJC PD SR,        Santa Rosa Campus
+460.5500, D025,  n, SRJC PD Pet,       Petaluma Campus
+460.5500, D031,  n, SRJC PD Win,       Windsor Campus
+460.8500, D343,  n, SRJC PD T3,        Tac 3
+460.8250, D343,  n, SRJC PD T4,        Tac 4
 
 # Regional Parks rangers
 453.5875, 82.5,  n, Parks Countywide,  Regional Parks Countywide Operations

@@ -6,6 +6,7 @@ use std::f32::consts::PI;
 use rustfft::num_complex::Complex32;
 
 use crate::biquad::{BUTTERWORTH4_Q, Biquad};
+use crate::dcs::Dcs;
 use crate::level::CarrierLevel;
 
 /// Audio is held back this long so a transmission isn't clipped while its
@@ -32,6 +33,9 @@ pub struct NfmConfig {
     pub max_deviation: f32,
     /// CTCSS tone required to open the channel, if any.
     pub tone_hz: Option<f32>,
+    /// DCS code required to open the channel, if any: its three octal
+    /// digits as a number.
+    pub dcs: Option<u16>,
     /// Carrier power over the noise floor needed to open, as a power ratio.
     pub squelch: f32,
 }
@@ -57,6 +61,7 @@ pub struct NfmChannel {
     tone_clean_subs: usize,
     sub_clean: bool,
     tone_ok: bool,
+    dcs: Option<Dcs>,
 
     deemph: f32,
     deemph_a: f32,
@@ -98,6 +103,7 @@ impl NfmChannel {
             tone_clean_subs: 0,
             sub_clean: false,
             tone_ok: false,
+            dcs: cfg.dcs.map(|code| Dcs::new(fs, code)),
             deemph: 0.0,
             deemph_a: 1.0 - (-2.0 * PI * 300.0 / fs).exp(),
             filters,
@@ -114,6 +120,9 @@ impl NfmChannel {
     pub fn resync(&mut self) {
         self.carrier = false;
         self.tone_ok = false;
+        if let Some(dcs) = &mut self.dcs {
+            dcs.resync();
+        }
         self.tone_clean_subs = 0;
         self.sub_clean = false;
         self.tone_acc = Complex32::ZERO;
@@ -175,6 +184,9 @@ impl NfmChannel {
                 0.0
             };
             self.prev = x;
+            if let Some(dcs) = &mut self.dcs {
+                dcs.step(dev);
+            }
 
             self.tone_dc += self.tone_dc_a * (dev - self.tone_dc);
             let ac = dev - self.tone_dc;
@@ -218,7 +230,8 @@ impl NfmChannel {
             self.tone_n = 0;
         }
 
-        if self.carrier && (self.cfg.tone_hz.is_none() || self.tone_ok) {
+        let coded = self.dcs.as_ref().is_none_or(Dcs::present);
+        if self.carrier && (self.cfg.tone_hz.is_none() || self.tone_ok) && coded {
             self.hold = DELAY_MS * fs as usize / 1000 / self.cfg.block_len;
         } else if self.hold > 0 {
             self.hold -= 1;
@@ -251,6 +264,7 @@ mod tests {
             block_len: BLOCK,
             max_deviation: 5000.0,
             tone_hz: rx_tone,
+            dcs: None,
             squelch: 4.0,
         });
         let mut rng = Lcg(1);
@@ -305,6 +319,52 @@ mod tests {
         assert_eq!(run(110.9, Some(114.8)).0, 0);
     }
 
+    /// As `run`, with a DCS code under the voice instead of a tone.
+    fn run_dcs(sent: u16, wanted: u16) -> usize {
+        let mut ch = NfmChannel::new(NfmConfig {
+            sample_rate: FS,
+            block_len: BLOCK,
+            max_deviation: 5000.0,
+            tone_hz: None,
+            dcs: Some(wanted),
+            squelch: 4.0,
+        });
+        let word = crate::dcs::codeword(sent);
+        let mut rng = Lcg(3);
+        let (mut phase, mut open) = (0.0f32, 0);
+        let mut audio = Vec::new();
+        for b in 0..4000 {
+            let keyed = (1000..3000).contains(&b);
+            let iq: Vec<Complex32> = (0..BLOCK)
+                .map(|i| {
+                    let t = (b * BLOCK + i) as f32 / FS;
+                    let bit = (word >> ((t * 134.4) as u32 % 23)) & 1 == 1;
+                    let dev = 3000.0 * (2.0 * PI * 1000.0 * t).sin() + if bit { 600.0 } else { -600.0 };
+                    phase = (phase + 2.0 * PI * dev / FS) % (2.0 * PI);
+                    let noise = Complex32::new(rng.next(), rng.next()) * 0.01;
+                    noise
+                        + if keyed {
+                            Complex32::from_polar(1.0, phase)
+                        } else {
+                            Complex32::ZERO
+                        }
+                })
+                .collect();
+            audio.clear();
+            open += usize::from(ch.process(&iq, f32::INFINITY, &mut audio));
+        }
+        open
+    }
+
+    #[test]
+    fn opens_on_matching_dcs_code_only() {
+        // Keyed for 2000 blocks; reading the code takes a few hundred ms.
+        let open = run_dcs(0o023, 0o023);
+        assert!((1500..2400).contains(&open), "open for {open} blocks");
+        assert_eq!(run_dcs(0o025, 0o023), 0);
+        assert_eq!(run_dcs(0o023, 0o624), 0);
+    }
+
     #[test]
     fn noise_burst_is_not_a_tone() {
         let mut ch = NfmChannel::new(NfmConfig {
@@ -312,6 +372,7 @@ mod tests {
             block_len: BLOCK,
             max_deviation: 5000.0,
             tone_hz: Some(114.8),
+            dcs: None,
             squelch: 4.0,
         });
         let mut rng = Lcg(7);

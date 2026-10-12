@@ -9,6 +9,7 @@
 extern crate gpui_mobile;
 
 #[cfg(target_os = "android")]
+mod editor;
 mod ui;
 #[cfg(target_os = "android")]
 mod usb;
