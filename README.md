@@ -121,6 +121,20 @@ you (which needs none), adds Start menu shortcuts, and can keep the programs up 
 
 Or [build from source](#building-from-source).
 
+### Checking a download
+
+Each file on a release has a signature beside it, `<file>.asc`, made with the project's signing
+key. Its public half is [`signing-key.asc`](signing-key.asc) in this repository; its
+fingerprint is `E54C 1041 23A2 2A44 D269  56F7 4B86 F8E2 8888 92DC`.
+
+```sh
+gpg --import signing-key.asc
+gpg --verify dmps-v1.0.0-linux-x86_64.tar.gz.asc dmps-v1.0.0-linux-x86_64.tar.gz
+```
+
+"Good signature from Nathan Todd" means the file is the one that was published. (gpg also warns
+that the key is not certified, unless you have told it you trust the key.)
+
 ### Updating
 
 ```sh
@@ -500,6 +514,9 @@ Things to know:
 - A release is made by tagging: `scripts/set-version 0.4.0`, commit, `git tag v0.4.0`,
   `git push origin main v0.4.0`. Running the release workflow by hand builds the same packages
   as downloadable artifacts and publishes nothing.
+- Release downloads are signed with the project's GPG key: by the workflow if the private key
+  is in the `GPG_PRIVATE_KEY` secret (with `GPG_PASSPHRASE` if it has one), otherwise by running
+  `scripts/sign-release v0.4.0` afterwards, which keeps the key on your own computer.
 - No signing secrets are set in the repository, so released APKs are signed with a debug key:
   they install, but can't be updated in place by one signed differently. Setting
   `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and

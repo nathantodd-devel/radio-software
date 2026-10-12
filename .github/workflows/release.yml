@@ -259,6 +259,26 @@ jobs:
           path: dist
           merge-multiple: true
 
+      # A detached signature for each download, made with the project's
+      # signing key (its public half is signing-key.asc), when the private
+      # key is in the repository's secrets. Without it the release goes out
+      # unsigned, and scripts/sign-release can add the signatures afterwards.
+      - name: Sign the downloads
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          SIGNING_KEY: E54C104123A22A44D26956F74B86F8E2888892DC
+        run: |
+          if [ -z "$GPG_PRIVATE_KEY" ]; then
+            echo "::warning::No signing key set; the downloads are not signed."
+            exit 0
+          fi
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          for file in dist/*; do
+            gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
+              --local-user "$SIGNING_KEY" --armor --detach-sign "$file"
+          done
+
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*

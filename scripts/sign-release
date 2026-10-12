@@ -1,0 +1,27 @@
+#!/bin/sh
+# Sign a release's downloads with the project's signing key and add the
+# signatures to the release.
+#
+#     scripts/sign-release v1.0.0
+#
+# For each file on the release this makes a detached signature, FILE.asc,
+# that anyone can check against signing-key.asc (see "Checking a download"
+# in the README). The release workflow does the same when the key is in the
+# repository's secrets; this is for releases made without it, and it keeps
+# the private key on this computer. Needs gh and gpg.
+set -eu
+
+KEY=E54C104123A22A44D26956F74B86F8E2888892DC
+tag=${1:?usage: scripts/sign-release TAG}
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+gh release download "$tag" --dir "$work"
+for file in "$work"/*; do
+    case $file in *.asc) continue ;; esac
+    # Signed again if run again: the newest signature replaces the last.
+    gpg --batch --yes --local-user "$KEY" --armor --detach-sign "$file"
+    gpg --batch --verify "$file.asc" "$file" 2> /dev/null
+    echo "signed $(basename "$file")"
+done
+gh release upload "$tag" "$work"/*.asc --clobber
