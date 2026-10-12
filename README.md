@@ -81,7 +81,7 @@ This is a young project. What has and has not been exercised:
 | RadioReference API import | Requests verified against the live service; parsing of real replies untested |
 | RadioReference CSV import | Tested only on hand-made samples |
 | Web version (`scanner-web`) | Tested on air with Chrome on Linux, driven by script: live data, controls, replay and audio delivery. Sound has not been listened to by a person; other browsers, phones and touch scrolling are untested |
-| Android app | Builds and draws on a Pixel 10; receiving with an Airspy attached is untested |
+| Android app | Builds and draws on a Pixel 10; receiving is untested with either an Airspy or an RTL-SDR attached |
 | Several receivers at once | Tested with two and three simulated receivers; never run with two real radios. Both are processed on one CPU core, so two radios at 10 MSPS may be more than a slower computer keeps up with |
 | RTL-SDR | Driver written and the engine tested at its sample rates with synthetic signals; never run with a real dongle |
 | Airspy Mini | Should work (sample rates are read from the device); untested |
@@ -448,8 +448,9 @@ Things to know:
 channel database as the desktop app, with a phone layout: what is playing at the top, and
 tabs for Channels, Activity, Systems and Settings.
 
-The Airspy plugs into the phone with a USB OTG adapter. Android asks whether the app may use
-it; after that the app opens it through Android's USB manager. An Airspy draws more power than
+The receiver, an Airspy or an RTL-SDR, plugs into the phone with a USB OTG adapter. Android asks
+whether the app may use it; after that the app opens it through Android's USB manager. With a
+USB hub, more than one is used at once, as on a desktop. An Airspy draws more power than
 some phones supply, so a powered hub may be needed. The app defaults to the lowest sample rate
 to go easy on the battery.
 
@@ -479,9 +480,12 @@ Known issues:
   adds debug information to its shaders, which crashes the shader compiler in some phones'
   GPU drivers (seen on a Pixel 10).
 
-On Android the Airspy library is compiled into the app from
-[`crates/drivers/airspy/vendor/libairspy`](crates/drivers/airspy/vendor/libairspy), a copy of
-upstream libairspy 1.0.12.
+On Android the receivers' libraries are compiled into the app, since there are none on the
+system to load: libairspy 1.0.12 from
+[`crates/drivers/airspy/vendor/libairspy`](crates/drivers/airspy/vendor/libairspy), unmodified,
+and the RTL-SDR Blog's librtlsdr 1.4.0 from
+[`crates/drivers/rtlsdr/vendor/librtlsdr`](crates/drivers/rtlsdr/vendor/librtlsdr), with one
+function added to open a device by the file descriptor Android hands over.
 
 ## Continuous integration
 
@@ -580,7 +584,10 @@ radio means implementing them:
 - **`Driver`**, for the kind of device: an id (`"airspy"`), a display name, and `open`, which
   finds a device and returns it as a `Box<dyn Receiver>`. To have several devices of the kind
   scanned together, also implement `open_all`, which returns every one attached; without it
-  the one `open` finds is used.
+  the one `open` finds is used. For the Android app, where the system opens USB devices and an
+  app is handed a file descriptor, implement `usb_ids` (the vendor and product ids to ask for)
+  and `open_fd`, compile the device's library in (the two drivers' `build.rs` show how), and
+  add the ids to the app's `device_filter.xml`.
 
 Then add the driver to `drivers()` in
 [`crates/scanner/src/engine.rs`](crates/scanner/src/engine.rs). It becomes a choice for

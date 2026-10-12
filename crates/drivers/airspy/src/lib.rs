@@ -333,22 +333,13 @@ impl receiver::Driver for Driver {
         let devices = Airspy::open_all()?;
         Ok(devices.into_iter().map(|device| Box::new(device) as _).collect())
     }
-}
 
-/// Opens an Airspy the operating system has already opened, by the file
-/// descriptor of that connection: see [`Airspy::open_fd`].
-pub struct FdDriver(pub i32);
-
-impl receiver::Driver for FdDriver {
-    fn id(&self) -> &'static str {
-        "airspy"
+    fn usb_ids(&self) -> Vec<(u16, u16)> {
+        // The Airspy R2 and Mini.
+        vec![(0x1d50, 0x60a1)]
     }
 
-    fn name(&self) -> &'static str {
-        "Airspy"
-    }
-
-    fn open(&self) -> receiver::Result<Box<dyn receiver::Receiver>> {
-        Ok(Box::new(Airspy::open_fd(self.0)?))
+    fn open_fd(&self, fd: i32) -> receiver::Result<Box<dyn receiver::Receiver>> {
+        Ok(Box::new(Airspy::open_fd(fd)?))
     }
 }

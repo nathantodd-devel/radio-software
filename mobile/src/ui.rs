@@ -8,7 +8,7 @@ use std::time::Duration;
 use gpui::{Context, Div, FontWeight, SharedString, Stateful, Window, div, prelude::*, px, relative, rgb};
 use gpui_mobile::android::jni;
 use scanner::db::{Db, System};
-use scanner::engine::{self, Config, ScanMode, Source};
+use scanner::engine::{self, Config, ScanMode, Source, UsbDevice};
 use scanner::session::{History, Live, Session};
 
 use crate::usb::{self, Opened};
@@ -60,9 +60,9 @@ pub struct ScannerApp {
     systems: Vec<System>,
     /// Systems being scanned together, in the order they were picked.
     selected: Vec<i64>,
-    /// The open connection to the Airspy, as Android's file descriptor.
-    airspy: Option<i32>,
-    /// The sample rates the Airspy offers, once it has been asked.
+    /// The radios Android has opened for the app; none until connected.
+    radios: Vec<UsbDevice>,
+    /// The sample rates the receiver offers, once it has been asked.
     rates: Vec<u32>,
     session: Option<Session>,
     /// The activity log from before the scan was last restarted.
@@ -100,7 +100,7 @@ impl ScannerApp {
                 .split(',')
                 .filter_map(|id| id.parse().ok())
                 .collect(),
-            airspy: None,
+            radios: Vec::new(),
             rates: Vec::new(),
             session: None,
             history: History::default(),
@@ -166,45 +166,46 @@ impl ScannerApp {
         }
     }
 
-    /// The sample rate to run at: the chosen one if this Airspy offers it,
+    /// The sample rate to run at: the chosen one if the receiver offers it,
     /// otherwise its slowest.
     fn rate(&self) -> Option<u32> {
         let chosen = self.rates.iter().find(|&&rate| rate == self.sample_rate);
         chosen.or(self.rates.iter().min()).copied()
     }
 
-    /// Find the Airspy, asking Android for it, and start scanning.
+    /// Find the radios attached, asking Android for them, and start
+    /// scanning. Any kind there is a driver for will do.
     fn connect(&mut self) {
         self.stop_scanning();
-        self.airspy = None;
-        self.status = match usb::open() {
-            Opened::Fd(fd) => {
+        self.radios.clear();
+        self.status = match usb::open(&engine::usb_ids()) {
+            Opened::Devices(radios) => {
                 let source = Config {
-                    source: Source::airspy_fd(fd),
+                    source: Source::Usb(radios.clone()),
                     ..Config::default()
                 };
                 match engine::sample_rates(&source) {
                     Ok(rates) => {
                         self.rates = rates;
-                        self.airspy = Some(fd);
+                        self.radios = radios;
                         String::new()
                     }
                     Err(e) => e,
                 }
             }
-            Opened::NoDevice => "No Airspy found. Plug one in with a USB OTG adapter.".into(),
-            Opened::PermissionRequested => "Allow the app to use the Airspy, then tap Connect.".into(),
+            Opened::NoDevice => "No receiver found. Plug in an Airspy or an RTL-SDR with a USB OTG adapter.".into(),
+            Opened::PermissionRequested => "Allow the app to use the receiver, then tap Connect.".into(),
             Opened::Failed(e) => e,
         };
         self.start();
     }
 
-    /// Scan the selected systems, if there is an Airspy to scan with.
+    /// Scan the selected systems, if there is a receiver to scan with.
     fn start(&mut self) {
-        // Only one receiver can hold the Airspy: stop the old one first.
+        // Only one scan can hold the receivers: stop the old one first.
         self.stop_scanning();
         self.expanded = None;
-        let (Some(fd), Some(db)) = (self.airspy, &self.db) else {
+        let (false, Some(db)) = (self.radios.is_empty(), &self.db) else {
             return;
         };
         if self.selected.is_empty() {
@@ -214,7 +215,7 @@ impl ScannerApp {
         match db.plan(&self.selected) {
             Ok(plan) => {
                 let config = Config {
-                    source: Source::airspy_fd(fd),
+                    source: Source::Usb(self.radios.clone()),
                     rate: self.rate(),
                     gain: self.gain,
                     scan: self.scan,
@@ -312,7 +313,7 @@ impl ScannerApp {
             },
             _ => ("Not scanning".into(), self.status.clone(), MUTED),
         };
-        let needs_connect = self.session.is_none() && self.airspy.is_none() || stopped.is_some();
+        let needs_connect = self.session.is_none() && self.radios.is_empty() || stopped.is_some();
         div()
             .flex_none()
             .px_4()
@@ -767,7 +768,7 @@ impl ScannerApp {
                     })),
             ))
             .child(note(match (rate, scan) {
-                (None, _) => "Sample rates appear once an Airspy is connected.".to_string(),
+                (None, _) => "Sample rates appear once a receiver is connected.".to_string(),
                 (Some(_), ScanMode::Channels) => {
                     "Scanning one channel at a time always uses the lowest sample rate.".to_string()
                 }
@@ -783,7 +784,7 @@ impl ScannerApp {
                     .py_3()
                     .flex()
                     .child(
-                        button("reconnect", "Reconnect Airspy", false, ACCENT).on_click(cx.listener(
+                        button("reconnect", "Reconnect receiver", false, ACCENT).on_click(cx.listener(
                             |this, _, _, cx| {
                                 this.connect();
                                 cx.notify();
@@ -835,7 +836,7 @@ impl Render for ScannerApp {
             (Tab::Channels, Some(session), Some(live)) => self.channels(session, live, cx),
             (Tab::Activity, Some(session), Some(live)) => self.activity(session, live, cx),
             _ => scroller("idle").child(note(
-                "Channels appear here once an Airspy is connected and a system is selected.",
+                "Channels appear here once a receiver is connected and a system is selected.",
             )),
         };
         div()

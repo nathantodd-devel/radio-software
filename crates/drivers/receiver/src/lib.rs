@@ -118,4 +118,23 @@ pub trait Driver: Send + Sync {
     fn open_all(&self) -> Result<Vec<Box<dyn Receiver>>> {
         Ok(vec![self.open()?])
     }
+
+    /// The USB (vendor, product) ids of the devices this driver handles,
+    /// for systems where a program can't go looking for devices itself and
+    /// the operating system has to be asked for them by id (Android). None
+    /// for a driver that doesn't support that.
+    fn usb_ids(&self) -> Vec<(u16, u16)> {
+        Vec::new()
+    }
+
+    /// Open a device that the operating system has already opened for the
+    /// program, by the file descriptor of that connection (Android). The
+    /// descriptor stays the caller's to close, after the receiver is
+    /// dropped.
+    fn open_fd(&self, _fd: i32) -> Result<Box<dyn Receiver>> {
+        Err(Error::Unavailable(format!(
+            "the {} driver can't use a device opened by the system",
+            self.name()
+        )))
+    }
 }

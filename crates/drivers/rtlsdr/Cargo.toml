@@ -6,5 +6,16 @@ license = "AGPL-3.0-only"
 description = "Safe interface to RTL-SDR receivers (RTL2832U with R820T2/R860 and other tuners) through librtlsdr"
 
 [dependencies]
-libloading = "0.8"
 receiver = { path = "../receiver", version = "1.0.0" }
+
+# On desktops the system's librtlsdr is loaded at run time.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+libloading = "0.8"
+
+# Android has no system librtlsdr: it is compiled in from vendor/librtlsdr
+# (see build.rs), along with libusb.
+[target.'cfg(target_os = "android")'.dependencies]
+libusb1-sys = { version = "0.7", features = ["vendored"] }
+
+[build-dependencies]
+cc = "1"

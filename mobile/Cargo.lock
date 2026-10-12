@@ -4178,7 +4178,9 @@ dependencies = [
 name = "rtlsdr"
 version = "1.0.0"
 dependencies = [
+ "cc",
  "libloading",
+ "libusb1-sys",
  "receiver",
 ]
 

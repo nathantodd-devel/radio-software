@@ -33,6 +33,53 @@ const READ_BYTES: u32 = 65_536;
 /// 3.2 MSPS on paper, but above 2.4 most computers' USB drops samples.
 const SAMPLE_RATES: [u32; 3] = [2_400_000, 2_048_000, 1_024_000];
 
+/// The USB (vendor, product) ids of the dongles librtlsdr knows: its
+/// `known_devices` table, as of the version in vendor/librtlsdr.
+pub const USB_IDS: [(u16, u16); 42] = [
+    (0x0bda, 0x2832), // Generic RTL2832U
+    (0x0bda, 0x2838), // Generic RTL2832U OEM
+    (0x0413, 0x6680), // DigitalNow Quad DVB-T PCI-E card
+    (0x0413, 0x6f0f), // Leadtek WinFast DTV Dongle mini D
+    (0x0458, 0x707f), // Genius TVGo DVB-T03 USB dongle (Ver. B)
+    (0x0ccd, 0x00a9), // Terratec Cinergy T Stick Black (rev 1)
+    (0x0ccd, 0x00b3), // Terratec NOXON DAB/DAB+ USB dongle (rev 1)
+    (0x0ccd, 0x00b4), // Terratec Deutschlandradio DAB Stick
+    (0x0ccd, 0x00b5), // Terratec NOXON DAB Stick - Radio Energy
+    (0x0ccd, 0x00b7), // Terratec Media Broadcast DAB Stick
+    (0x0ccd, 0x00b8), // Terratec BR DAB Stick
+    (0x0ccd, 0x00b9), // Terratec WDR DAB Stick
+    (0x0ccd, 0x00c0), // Terratec MuellerVerlag DAB Stick
+    (0x0ccd, 0x00c6), // Terratec Fraunhofer DAB Stick
+    (0x0ccd, 0x00d3), // Terratec Cinergy T Stick RC (Rev.3)
+    (0x0ccd, 0x00d7), // Terratec T Stick PLUS
+    (0x0ccd, 0x00e0), // Terratec NOXON DAB/DAB+ USB dongle (rev 2)
+    (0x1554, 0x5020), // PixelView PV-DT235U(RN)
+    (0x15f4, 0x0131), // Astrometa DVB-T/DVB-T2
+    (0x15f4, 0x0133), // HanfTek DAB+FM+DVB-T
+    (0x185b, 0x0620), // Compro Videomate U620F
+    (0x185b, 0x0650), // Compro Videomate U650F
+    (0x185b, 0x0680), // Compro Videomate U680F
+    (0x1b80, 0xd393), // GIGABYTE GT-U7300
+    (0x1b80, 0xd394), // DIKOM USB-DVBT HD
+    (0x1b80, 0xd395), // Peak 102569AGPK
+    (0x1b80, 0xd397), // KWorld KW-UB450-T USB DVB-T Pico TV
+    (0x1b80, 0xd398), // Zaapa ZT-MINDVBZP
+    (0x1b80, 0xd39d), // SVEON STV20 DVB-T USB & FM
+    (0x1b80, 0xd3a4), // Twintech UT-40
+    (0x1b80, 0xd3a8), // ASUS U3100MINI_PLUS_V2
+    (0x1b80, 0xd3af), // SVEON STV27 DVB-T USB & FM
+    (0x1b80, 0xd3b0), // SVEON STV21 DVB-T USB & FM
+    (0x1d19, 0x1101), // Dexatek DK DVB-T Dongle (Logilink VG0002A)
+    (0x1d19, 0x1102), // Dexatek DK DVB-T Dongle (MSI DigiVox mini II V3.0)
+    (0x1d19, 0x1103), // Dexatek Technology Ltd. DK 5217 DVB-T Dongle
+    (0x1d19, 0x1104), // MSI DigiVox Micro HD
+    (0x1f4d, 0xa803), // Sweex DVB-T USB
+    (0x1f4d, 0xb803), // GTek T803
+    (0x1f4d, 0xc803), // Lifeview LV5TDeluxe
+    (0x1f4d, 0xd286), // MyGica TD312
+    (0x1f4d, 0xd803), // PROlectrix DV107669
+];
+
 #[derive(Debug)]
 pub enum Error {
     /// librtlsdr isn't installed, or isn't one this crate can use.
@@ -158,6 +205,31 @@ impl RtlSdr {
                 }
             )));
         }
+        Ok(Self::opened(lib, device, &name))
+    }
+
+    /// Open an RTL-SDR that the operating system has already opened, by the
+    /// file descriptor of that connection: the way on Android, where an app
+    /// may not open USB devices itself. The descriptor stays the caller's to
+    /// close, after this is dropped.
+    pub fn open_fd(fd: i32) -> Result<Self> {
+        let lib = Lib::load().map_err(Error::Library)?;
+        let open_fd = lib
+            .open_fd
+            .ok_or_else(|| Error::Library("it can't open a device by file descriptor".into()))?;
+        let mut device = std::ptr::null_mut();
+        // SAFETY: `device` is a valid place for the handle to be written.
+        let code = unsafe { open_fd(&mut device, fd) };
+        if code < 0 || device.is_null() {
+            return Err(Error::Device(format!(
+                "couldn't open the RTL-SDR (librtlsdr error {code})"
+            )));
+        }
+        Ok(Self::opened(lib, device, "RTL-SDR"))
+    }
+
+    /// Wrap a device that has just been opened.
+    fn opened(lib: Lib, device: *mut c_void, name: &str) -> Self {
         let handle = Arc::new(Handle { lib, device });
         // SAFETY: `device` is open.
         let tuner = match unsafe { (handle.lib.get_tuner_type)(device) } {
@@ -169,11 +241,11 @@ impl RtlSdr {
             6 => "R828D",
             _ => "unknown",
         };
-        Ok(Self {
+        Self {
             handle,
             name: format!("{name} ({tuner} tuner)"),
             reader: None,
-        })
+        }
     }
 
     /// The device's name and tuner chip.
@@ -400,6 +472,14 @@ impl receiver::Driver for Driver {
     fn open_all(&self) -> receiver::Result<Vec<Box<dyn receiver::Receiver>>> {
         let devices = RtlSdr::open_all()?;
         Ok(devices.into_iter().map(|device| Box::new(device) as _).collect())
+    }
+
+    fn usb_ids(&self) -> Vec<(u16, u16)> {
+        USB_IDS.to_vec()
+    }
+
+    fn open_fd(&self, fd: i32) -> receiver::Result<Box<dyn receiver::Receiver>> {
+        Ok(Box::new(RtlSdr::open_fd(fd)?))
     }
 }
 

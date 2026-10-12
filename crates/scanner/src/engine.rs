@@ -55,16 +55,28 @@ pub enum Source {
     /// The receivers this driver opens, which needn't be one of
     /// [`drivers`]: anything implementing the `receiver` crate's traits.
     Driver(Arc<dyn Driver>),
+    /// USB devices the operating system has opened for us (Android, where
+    /// a program can't open them itself): each goes to whichever of
+    /// [`drivers`] handles its ids.
+    Usb(Vec<UsbDevice>),
     /// 16-bit I/Q read from stdin.
     Stdin,
 }
 
-impl Source {
-    /// An Airspy the operating system has opened for us, by the file
-    /// descriptor of that connection (Android).
-    pub fn airspy_fd(fd: i32) -> Self {
-        Source::Driver(Arc::new(airspy::FdDriver(fd)))
-    }
+/// A USB device the operating system has opened for the program.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UsbDevice {
+    pub vendor: u16,
+    pub product: u16,
+    /// The file descriptor of the connection, which stays the caller's to
+    /// close once nothing is using the device.
+    pub fd: i32,
+}
+
+/// The USB (vendor, product) ids of every device [`drivers`] can use when
+/// the operating system does the opening: what to ask it for.
+pub fn usb_ids() -> Vec<(u16, u16)> {
+    drivers().iter().flat_map(|driver| driver.usb_ids()).collect()
 }
 
 /// The kinds of receiver that come with the scanner, in the order they are
@@ -375,6 +387,7 @@ fn open_all(source: &Source) -> Result<Vec<Box<dyn Receiver>>, String> {
             vec![driver.clone()]
         }
         Source::Auto => drivers(),
+        Source::Usb(devices) => return open_usb(devices),
         Source::Stdin => return Err("stdin is not a receiver".into()),
     };
     let (mut devices, mut failures) = (Vec::new(), Vec::new());
@@ -392,6 +405,29 @@ fn open_all(source: &Source) -> Result<Vec<Box<dyn Receiver>>, String> {
             .concat()
             .split_once(": ")
             .map_or_else(String::new, |f| f.1.to_string())),
+    }
+}
+
+/// Open the devices the operating system has opened for us, each with the
+/// driver that handles its kind.
+fn open_usb(devices: &[UsbDevice]) -> Result<Vec<Box<dyn Receiver>>, String> {
+    let drivers = drivers();
+    let (mut opened, mut failures) = (Vec::new(), Vec::new());
+    for device in devices {
+        let id = (device.vendor, device.product);
+        let Some(driver) = drivers.iter().find(|driver| driver.usb_ids().contains(&id)) else {
+            failures.push(format!("no driver handles USB device {:04x}:{:04x}", id.0, id.1));
+            continue;
+        };
+        match driver.open_fd(device.fd) {
+            Ok(receiver) => opened.push(receiver),
+            Err(e) => failures.push(format!("{}: {e}", driver.name())),
+        }
+    }
+    match (opened.is_empty(), failures.is_empty()) {
+        (false, _) => Ok(opened),
+        (true, true) => Err("no receiver found".into()),
+        (true, false) => Err(failures.join(". ")),
     }
 }
 
@@ -1427,6 +1463,35 @@ mod tests {
         let (names, _, _, tuned_to) = scan(1);
         assert_eq!(names, ["playback"]);
         assert!(tuned_to.len() > 2, "tuned to {tuned_to:?}");
+    }
+
+    #[test]
+    fn sends_system_opened_usb_devices_to_their_drivers() {
+        // What to ask the system for: every driver's devices.
+        let ids = usb_ids();
+        assert!(ids.contains(&(0x1d50, 0x60a1)), "the Airspy");
+        assert!(ids.contains(&(0x0bda, 0x2838)), "the usual RTL-SDR");
+        // A device no driver claims is refused by name; one that a driver
+        // does claim gets as far as that driver (which can't use the
+        // descriptor of something that isn't a radio).
+        let source = |vendor, product| Config {
+            source: Source::Usb(vec![UsbDevice {
+                vendor,
+                product,
+                fd: -1,
+            }]),
+            ..Config::default()
+        };
+        assert!(probe(&source(0x1234, 0x5678)).err().unwrap().contains("1234:5678"));
+        let refused = probe(&source(0x0bda, 0x2838)).err().unwrap();
+        assert!(refused.starts_with("RTL-SDR: "), "{refused}");
+        assert!(
+            probe(&Config {
+                source: Source::Usb(Vec::new()),
+                ..Config::default()
+            })
+            .is_err()
+        );
     }
 
     #[test]
