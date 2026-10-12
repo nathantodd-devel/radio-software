@@ -4273,7 +4273,7 @@ dependencies = [
 
 [[package]]
 name = "scanner-proto"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -4281,7 +4281,7 @@ dependencies = [
 
 [[package]]
 name = "scanner-web-client"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "futures",
  "gpui",

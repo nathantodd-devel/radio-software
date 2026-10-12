@@ -1,13 +1,13 @@
 [package]
 name = "scanner-web"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 license = "AGPL-3.0-only"
 description = "The scanner as a web server: scan here, listen and control from a browser"
 
 [dependencies]
-scanner = { path = "../scanner", version = "1.0.0" }
-scanner-proto = { path = "../scanner-proto", version = "1.0.0" }
+scanner = { path = "../scanner", version = "1.0.1" }
+scanner-proto = { path = "../scanner-proto", version = "1.0.1" }
 ctrlc = "3"
 # For the access code's cookie. The version rustls uses.
 ring = "0.17"

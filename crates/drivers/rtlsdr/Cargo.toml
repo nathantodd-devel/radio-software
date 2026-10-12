@@ -1,12 +1,12 @@
 [package]
 name = "rtlsdr"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 license = "AGPL-3.0-only"
 description = "Safe interface to RTL-SDR receivers (RTL2832U with R820T2/R860 and other tuners) through librtlsdr"
 
 [dependencies]
-receiver = { path = "../receiver", version = "1.0.0" }
+receiver = { path = "../receiver", version = "1.0.1" }
 
 # On desktops the system's librtlsdr is loaded at run time.
 [target.'cfg(not(target_os = "android"))'.dependencies]

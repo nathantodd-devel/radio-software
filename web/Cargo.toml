@@ -4,7 +4,7 @@
 # app's (the revision the Android app also uses).
 [package]
 name = "scanner-web-client"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 license = "AGPL-3.0-only"
 publish = false
