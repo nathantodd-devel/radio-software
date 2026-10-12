@@ -44,7 +44,10 @@ the page can listen and change settings.
                      ask for this code before showing or playing anything.
                      Can also be given in the SCANNER_WEB_ACCESS_CODE
                      environment variable, which keeps it out of the list of
-                     running programs";
+                     running programs
+  -v, --version      say which version this is
+
+To update, run `scanner update`: it replaces this program too.";
 
 const DEFAULT_PORT: u16 = 1515;
 /// How often listeners are told how every channel stands.
@@ -108,6 +111,13 @@ fn main() {
             "--tls-cert" => tls_cert = Some(PathBuf::from(value())),
             "--tls-key" => tls_key = Some(PathBuf::from(value())),
             "--access-code" => access_code = Some(value()),
+            "-v" | "--version" => {
+                println!(
+                    "scanner-web {} (Digital Mobile Police Scanner)",
+                    scanner::update::VERSION
+                );
+                exit(0)
+            }
             "-h" | "--help" => {
                 println!("{USAGE}");
                 exit(0)

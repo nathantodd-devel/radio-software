@@ -34,6 +34,10 @@ const WRONG_CODE_DELAY: Duration = Duration::from_secs(2);
 const COOKIE: &str = "scanner_access";
 /// Where the page asking for the access code sends it.
 const LOGIN_PATH: &str = "/login";
+/// The icon browsers show for the site. Served to anyone, access code or
+/// not, and whether or not the browser client has been built.
+const ICON_PATH: &str = "/favicon.svg";
+const ICON: &str = include_str!("../../../icons/dmps-icon.svg");
 
 /// How browsers are served.
 pub struct Site {
@@ -200,7 +204,18 @@ pub fn serve(tcp: TcpStream, site: &Site, hub: &Mutex<Hub>, clients: &Clients) {
     let Some(mut head) = Head::read(&mut *stream) else {
         return;
     };
-    // Nothing is served, and no listener let in, without the access code.
+    if head.path() == ICON_PATH {
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: image/svg+xml\r\nContent-Length: {}\r\n\
+             Cache-Control: public, max-age=86400\r\nConnection: close\r\n\r\n{ICON}",
+            ICON.len()
+        )
+        .ok();
+        stream.flush().ok();
+        return;
+    }
+    // Nothing else is served, and no listener let in, without the access code.
     if let Some(access) = site.access.as_ref().filter(|access| !access.admits(&head)) {
         return ask_for_code(stream, &mut head, access, site.tls.is_some());
     }
@@ -252,6 +267,7 @@ const LOGIN_PAGE: &str = r#"<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Digital Mobile Police Scanner</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <style>
 body { margin: 0; padding: 32px 16px; background: #121318; color: #e6e9ee; font: 16px/1.5 system-ui, sans-serif; }
 form { max-width: 360px; margin: 0 auto; padding: 24px; border: 1px solid #313743; border-radius: 8px; background: #1c2027; }

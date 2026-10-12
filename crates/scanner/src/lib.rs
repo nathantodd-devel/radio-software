@@ -7,4 +7,5 @@ pub mod plan;
 pub mod radioreference;
 pub mod session;
 pub mod settings;
+pub mod update;
 mod wav;

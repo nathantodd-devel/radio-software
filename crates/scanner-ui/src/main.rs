@@ -1630,6 +1630,18 @@ fn stepper(label: &'static str, value: String, down: Stateful<Div>, up: Stateful
 }
 
 fn main() {
+    // The app takes no options, but can say what it is.
+    match std::env::args().nth(1).as_deref() {
+        Some("-v" | "--version") => {
+            println!("scanner-ui {} ({TITLE})", scanner::update::VERSION);
+            return;
+        }
+        Some("-h" | "--help") => {
+            println!("usage: scanner-ui    the {TITLE} desktop app\n       scanner-ui --version");
+            return;
+        }
+        _ => {}
+    }
     Application::new().run(|cx: &mut App| {
         // Never open larger than the screen can show.
         let mut window_size = size(px(DEFAULT_SIZE.0), px(DEFAULT_SIZE.1));

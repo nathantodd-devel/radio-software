@@ -4387,6 +4387,8 @@ dependencies = [
  "roxmltree 0.21.1",
  "rtlsdr",
  "rusqlite",
+ "serde_json",
+ "sha2 0.10.9",
  "ureq",
 ]
 

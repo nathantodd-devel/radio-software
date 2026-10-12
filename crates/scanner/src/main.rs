@@ -9,6 +9,7 @@ use scanner::db::Db;
 use scanner::engine::{self, Config, Controls, Event, ScanMode, Source};
 use scanner::plan::{Kind, Plan};
 use scanner::radioreference::{self, Credentials, Imported};
+use scanner::update;
 
 const USAGE: &str = "\
 usage: scanner [options] SYSTEM...     scan one or more systems
@@ -18,6 +19,8 @@ usage: scanner [options] SYSTEM...     scan one or more systems
        scanner remove SYSTEM
        scanner radioreference system ID    import a trunked system by its system ID
        scanner radioreference county ID    import a county's conventional channels
+       scanner update [--check] [--yes]    update to the newest release
+       scanner --version
 
 SYSTEM is a system's number or name (or part of it) from `scanner systems`,
 or the path of a channel file to scan without importing it. The receiver
@@ -60,7 +63,18 @@ page addresses: radioreference.com/db/sid/ID and .../db/browse/ctid/ID.
       --stay SECS    longest turn for a band that stays busy (default 20)
       --db FILE      channel database (default: dmps/channels.db beside
                      this program if that folder exists, otherwise in your
-                     user data directory; ~/.local/share on Linux)";
+                     user data directory; ~/.local/share on Linux)
+  -v, --version      say which version this is
+
+`update` asks GitHub for the newest release and, if it is newer than this
+one, downloads the package for this computer and replaces the programs where
+this one is (scanner, scanner-ui, scanner-web and what comes with them).
+Channels and settings are not touched. Nothing looks for updates unasked.
+      --check        only say whether there is a newer release (exit status
+                     10 if there is)
+  -y, --yes          don't ask before replacing the programs
+      --force        install the newest release even if it isn't newer
+      --dir DIR      update the copy in DIR instead of this one";
 
 struct Options {
     words: Vec<String>,
@@ -70,6 +84,12 @@ struct Options {
     name: Option<String>,
     location: Option<String>,
     sites: Option<PathBuf>,
+    /// For `update`: only say whether there is one; don't ask first;
+    /// install the newest release even if it isn't newer; and where.
+    check: bool,
+    yes: bool,
+    force: bool,
+    dir: Option<PathBuf>,
     config: Config,
 }
 
@@ -87,6 +107,10 @@ fn parse_args() -> Options {
         name: None,
         location: None,
         sites: None,
+        check: false,
+        yes: false,
+        force: false,
+        dir: None,
         config: Config::default(),
     };
     let mut args = std::env::args().skip(1);
@@ -127,6 +151,14 @@ fn parse_args() -> Options {
             "--name" => o.name = Some(value()),
             "--location" => o.location = Some(value()),
             "--sites" => o.sites = Some(PathBuf::from(value())),
+            "--check" => o.check = true,
+            "-y" | "--yes" => o.yes = true,
+            "--force" => o.force = true,
+            "--dir" => o.dir = Some(PathBuf::from(value())),
+            "-v" | "--version" => {
+                println!("scanner {} (Digital Mobile Police Scanner)", update::VERSION);
+                exit(0)
+            }
             "-h" | "--help" => {
                 println!("{USAGE}");
                 exit(0)
@@ -325,8 +357,77 @@ fn scan(o: &Options, plan: Plan) {
     }
 }
 
+/// `scanner update`: look for a newer release and install it.
+fn update_program(o: &Options) {
+    if o.words.len() > 1 {
+        die(format!("wrong arguments\n{USAGE}"));
+    }
+    let release = update::latest().unwrap_or_else(|e| die(e));
+    let newer = update::is_newer(&release.version, update::VERSION);
+    if newer {
+        println!("Version {} is out; this is {}.", release.version, update::VERSION);
+    } else {
+        println!(
+            "This is version {}, and the newest release is {}.",
+            update::VERSION,
+            release.version
+        );
+    }
+    if o.check || !(newer || o.force) {
+        // For scripts: 0 when up to date, 10 when there is something newer.
+        exit(if newer { 10 } else { 0 })
+    }
+    let Some(package) = release.package else {
+        die("the release has no package for this kind of computer; build it from source instead")
+    };
+    let dir = o.dir.clone().unwrap_or_else(|| {
+        let program = std::env::current_exe().unwrap_or_else(|e| die(format!("can't tell where this program is: {e}")));
+        let dir = program.parent().map(Path::to_path_buf).unwrap_or_default();
+        if update::is_build_dir(&dir) {
+            die("this copy was built from source: update it with `git pull` and `cargo build --release`")
+        }
+        dir
+    });
+    println!(
+        "{} ({:.1} MB) will replace the programs in {}.",
+        package.name,
+        package.size as f64 / 1e6,
+        dir.display()
+    );
+    if !o.yes {
+        eprint!("Go ahead? [y/N] ");
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer).ok();
+        if !matches!(answer.trim(), "y" | "Y" | "yes") {
+            die("not updated")
+        }
+    }
+    let archive = std::env::temp_dir().join(format!("dmps-update-{}-{}", std::process::id(), package.name));
+    let mut shown = 0;
+    let result = update::download(&package, &archive, |bytes| {
+        // A line every tenth of the way.
+        let tenth = (bytes * 10).checked_div(package.size).unwrap_or(0);
+        if tenth > shown {
+            shown = tenth;
+            eprintln!("  downloaded {}%", tenth * 10);
+        }
+    })
+    .and_then(|()| update::install(&archive, &dir));
+    std::fs::remove_file(&archive).ok();
+    let written = result.unwrap_or_else(|e| die(e));
+    println!(
+        "Updated to version {}: {} files replaced. Restart any of the programs that are running.",
+        release.version,
+        written.len()
+    );
+}
+
 fn main() {
     let o = parse_args();
+    // Updating has nothing to do with the channel database.
+    if o.words.first().map(String::as_str) == Some("update") {
+        return update_program(&o);
+    }
     let mut db = Db::open(&o.db).unwrap_or_else(|e| die(e));
     let words: Vec<&str> = o.words.iter().map(String::as_str).collect();
     match words.as_slice() {

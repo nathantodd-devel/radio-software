@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="icons/dmps-logo.svg" alt="DMPS: Digital Mobile Police Scanner" width="520">
+</p>
+
 # Digital Mobile Police Scanner (DMPS)
 
 [![CI](https://github.com/nathantodd-devel/radio-software/actions/workflows/ci.yml/badge.svg)](https://github.com/nathantodd-devel/radio-software/actions/workflows/ci.yml)
@@ -111,6 +115,22 @@ the receiver and run `scanner-ui` (or `scanner` for the command line). Each arch
 `README.txt` with platform notes.
 
 Or [build from source](#building-from-source).
+
+### Updating
+
+```sh
+scanner update            # install the newest release, after asking
+scanner update --check    # only say whether there is one
+scanner --version         # scanner-ui and scanner-web take --version too
+```
+
+`scanner update` asks GitHub for the newest release and, if it is newer, downloads the package
+for your computer, checks it against the checksum GitHub publishes, and replaces the programs
+in the folder `scanner` is in (`scanner-ui`, `scanner-web` and its page included). Your channels
+and settings are not touched. Restart anything that was running. It needs the `tar` command,
+which Linux, macOS and Windows 10 and later all have. The programs never look for updates by
+themselves, and a copy built from source is updated with `git pull` and `cargo build` instead.
+On Android, install the new APK from the releases page.
 
 ## Using the desktop app
 
@@ -493,6 +513,7 @@ Things to know:
 | `crates/drivers/rtlsdr` | RTL-SDR driver, through the system's `librtlsdr`, loaded at run time |
 | `crates/drivers/audio` | Audio output: `aplay` on Linux, the native audio API elsewhere |
 | `mobile` | The Android app (separate cargo project) |
+| `icons` | The logo and icons; `scripts/make-icons` redraws them |
 | `.github/workflows` | CI, Android CI and the release build |
 
 ## How it works

@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+"""Redraw the logo and icons from their description here.
+
+    scripts/make-icons path/to/Lilex-Bold.ttf
+
+Needs the fontTools package and the Lilex Bold font (the monospaced font the
+interface uses; Zed's repository has it under assets/fonts/lilex). Writes the
+SVGs in icons/ and the Android launcher and splash drawables. The Android
+PNGs and icons/dmps.ico are then made from the SVGs with ImageMagick.
+
+The mark is DM over PS with a row of spectrum bars between them, square and
+full-bleed so that it can be cropped to any shape.
+"""
+import pathlib, sys
+from fontTools.ttLib import TTFont
+from fontTools.pens.svgPathPen import SVGPathPen
+from fontTools.pens.transformPen import TransformPen
+
+BG, BORDER, TEXT, MUTED, GREEN = "#121318", "#313743", "#e6e9ee", "#8b93a1", "#4cc38a"
+OUT = pathlib.Path("icons")
+font = TTFont(sys.argv[1])
+glyphs, cmap, upm = font.getGlyphSet(), font.getBestCmap(), font["head"].unitsPerEm
+CAP = font["OS/2"].sCapHeight / upm
+
+
+def width(text, size, tracking=0.0):
+    return sum(glyphs[cmap[ord(c)]].width / upm * size + tracking for c in text) - tracking
+
+
+def outline(text, x, baseline, size, tracking=0.0):
+    scale, parts = size / upm, []
+    for c in text:
+        glyph, pen = glyphs[cmap[ord(c)]], SVGPathPen(glyphs, ntos=lambda v: f"{v:.1f}")
+        glyph.draw(TransformPen(pen, (scale, 0, 0, -scale, x, baseline)))
+        parts.append(pen.getCommands())
+        x += glyph.width * scale + tracking
+    return "".join(parts)
+
+
+def shapes():
+    """The mark as (path data, colour) pairs, centred in a 256 x 256 box."""
+    size, track, gap = 84, 5, 58
+    cap = CAP * size
+    top, x = 128 - (2 * cap + gap) / 2, 128 - width("DM", size, track) / 2
+    found = [(outline("DM", x, top + cap, size, track), TEXT),
+             (outline("PS", x, top + 2 * cap + gap, size, track), TEXT)]
+    heights = [8, 16, 10, 22, 12, 34, 14, 20, 10, 16, 8]
+    step, bar, r = 15.0, 7, 3.5
+    left = 128 - ((len(heights) - 1) * step + bar) / 2
+    for i, h in enumerate(heights):
+        bx, by, straight = left + i * step, 128 - h / 2, h - 2 * r
+        # A bar with round ends, as a path so every format can take it.
+        d = (f"M{bx:.1f} {by + r:.1f}a{r} {r} 0 0 1 {bar} 0v{straight:g}"
+             f"a{r} {r} 0 0 1 -{bar} 0z")
+        found.append((d, GREEN if h == 34 else BORDER if h < 12 else MUTED))
+    return found
+
+
+def mark():
+    """The mark alone, centred in a 256 x 256 box, with no background."""
+    return "".join(f'<path d="{d}" fill="{colour}"/>' for d, colour in shapes())
+
+
+def android_vector(scale, comment):
+    """The mark as an Android vector drawable, at `scale` about the centre."""
+    paths = "".join(
+        f'\n        <path android:fillColor="{colour}" android:pathData="{d}" />' for d, colour in shapes()
+    )
+    return (f'<?xml version="1.0" encoding="utf-8"?>\n<!-- {comment}\n     Made from icons/dmps-icon.svg. -->\n'
+            '<vector xmlns:android="http://schemas.android.com/apk/res/android"\n'
+            '    android:width="108dp"\n    android:height="108dp"\n'
+            '    android:viewportWidth="256"\n    android:viewportHeight="256">\n'
+            f'    <group android:pivotX="128" android:pivotY="128" android:scaleX="{scale:g}" android:scaleY="{scale:g}">'
+            f'{paths}\n    </group>\n</vector>\n')
+
+
+def square(scale):
+    """The mark at `scale` on a square that is all background."""
+    offset = 128 * (1 - scale)
+    return ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">'
+            f'<rect width="256" height="256" fill="{BG}"/>'
+            f'<g transform="translate({offset:g} {offset:g}) scale({scale:g})">{mark()}</g></svg>\n')
+
+
+def wide():
+    lines = [(104, "Digital Mobile"), (156, "Police Scanner")]
+    name = "".join(f'<path d="{outline(line, 196, y, 44)}" fill="{TEXT}"/>' for y, line in lines)
+    w = round(196 + max(width(line, 44) for _, line in lines) + 36)
+    label = f'<path d="{outline("DMPS", 197, 54, 17, 2.5)}" fill="{GREEN}"/>'
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} 200" width="{w}" height="200">'
+            f'<rect width="{w}" height="200" fill="{BG}"/>'
+            f'<g transform="translate(20 20) scale(0.625)">{mark()}</g>{label}{name}</svg>\n')
+
+
+(OUT / "dmps-icon.svg").write_text(square(1))
+# Everything inside the middle two thirds, which is all that is sure to show
+# when a launcher crops the icon to a circle or a rounded shape.
+(OUT / "dmps-icon-maskable.svg").write_text(square(0.66))
+(OUT / "dmps-logo.svg").write_text(wide())
+
+RES = pathlib.Path("mobile/android/gradle/app/src/main/res")
+(RES / "drawable/ic_launcher_foreground.xml").write_text(android_vector(
+    0.66, "The launcher icon's foreground: the mark, kept inside the part of an\n     adaptive icon that every launcher shape shows."))
+(RES / "drawable/splash_icon.xml").write_text(android_vector(0.66, "The mark, for the splash screen."))
+ADAPTIVE = ('<?xml version="1.0" encoding="utf-8"?>\n'
+            '<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n'
+            '    <background android:drawable="@color/gpui_surface" />\n'
+            '    <foreground android:drawable="@drawable/ic_launcher_foreground" />\n'
+            '    <monochrome android:drawable="@drawable/ic_launcher_foreground" />\n'
+            '</adaptive-icon>\n')
+(RES / "mipmap-anydpi-v26").mkdir(exist_ok=True)
+for name in ("ic_launcher", "ic_launcher_round"):
+    (RES / f"mipmap-anydpi-v26/{name}.xml").write_text(ADAPTIVE)

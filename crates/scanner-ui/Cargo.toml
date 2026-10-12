@@ -11,6 +11,10 @@ default-run = "scanner-ui"
 # package (see build.rs); without this feature the UI is Wayland-only on Linux.
 x11 = ["gpui/x11"]
 
+# Puts the icon into the Windows program (see build.rs).
+[build-dependencies]
+winresource = "0.1"
+
 [dependencies]
 scanner = { path = "../scanner" , version = "1.0.0" }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }

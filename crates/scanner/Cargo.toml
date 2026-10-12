@@ -15,3 +15,6 @@ ctrlc = "3"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 ureq = "2"
 roxmltree = "0.21.1"
+# For the updater: reading GitHub's reply and checking what was downloaded.
+serde_json = "1"
+sha2 = "0.10"
