@@ -154,6 +154,42 @@ pub fn download(package: &Package, to: &Path, mut progress: impl FnMut(u64)) -> 
     result
 }
 
+/// Bring the copy installed in `dir` up to the newest release, if there is a
+/// newer one, saying nothing and asking nothing: for running unattended.
+/// Returns the version installed, or `None` if it was up to date already.
+/// What happened, when anything did, is added to `update.log` in `dir`.
+pub fn update_quietly(dir: &Path) -> Result<Option<String>, String> {
+    let result = (|| {
+        let release = latest()?;
+        if !is_newer(&release.version, VERSION) {
+            return Ok(None);
+        }
+        let package = release
+            .package
+            .ok_or("the release has no package for this kind of computer")?;
+        let archive = std::env::temp_dir().join(format!("dmps-update-{}-{}", std::process::id(), package.name));
+        let installed = download(&package, &archive, |_| {}).and_then(|()| install(&archive, dir));
+        fs::remove_file(&archive).ok();
+        installed.map(|_| Some(release.version))
+    })();
+    let entry = match &result {
+        Ok(None) => None,
+        Ok(Some(version)) => Some(format!("updated from {VERSION} to {version}")),
+        Err(e) => Some(format!("not updated: {e}")),
+    };
+    if let Some(entry) = entry {
+        let log = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("update.log"));
+        if let Ok(mut log) = log {
+            let when = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+            writeln!(log, "{when}  {entry}").ok();
+        }
+    }
+    result
+}
+
 /// Whether `dir` looks like where cargo builds the program, not an install.
 pub fn is_build_dir(dir: &Path) -> bool {
     dir.join(".fingerprint").is_dir() || dir.join("build").join(".rustc_info.json").exists()

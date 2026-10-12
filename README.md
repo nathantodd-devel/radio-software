@@ -114,6 +114,11 @@ Download an archive for your platform from the
 the receiver and run `scanner-ui` (or `scanner` for the command line). Each archive has a
 `README.txt` with platform notes.
 
+On Windows there is also an installer, `dmps-<version>-windows-x86_64-setup.exe`. It asks
+whether to install for everyone on the computer (which needs administrator rights) or just for
+you (which needs none), adds Start menu shortcuts, and can keep the programs up to date: see
+[Updating](#updating).
+
 Or [build from source](#building-from-source).
 
 ### Updating
@@ -131,6 +136,16 @@ and settings are not touched. Restart anything that was running. It needs the `t
 which Linux, macOS and Windows 10 and later all have. The programs never look for updates by
 themselves, and a copy built from source is updated with `git pull` and `cargo build` instead.
 On Android, install the new APK from the releases page.
+
+**Automatic updates on Windows.** The installer offers to set up a scheduled task that checks
+GitHub every six hours and installs a new release when there is one. Installed for everyone, the
+task runs as the SYSTEM account, since only an administrator may change files in Program Files;
+installed for one user, it runs as that user. It is a scheduled task rather than a Windows
+service because setting up a service needs administrator rights, which a one-user install
+doesn't have. What it did is recorded in `update.log` beside the programs. To turn it off,
+run the installer again and untick the option, or delete the "DMPS" task in Task Scheduler.
+The installer is built from [`installer/dmps.iss`](installer/dmps.iss) with
+[Inno Setup](https://jrsoftware.org/isinfo.php).
 
 ## Using the desktop app
 
@@ -513,6 +528,7 @@ Things to know:
 | `crates/drivers/rtlsdr` | RTL-SDR driver, through the system's `librtlsdr`, loaded at run time |
 | `crates/drivers/audio` | Audio output: `aplay` on Linux, the native audio API elsewhere |
 | `mobile` | The Android app (separate cargo project) |
+| `installer` | The Windows installer's Inno Setup script |
 | `icons` | The logo and icons; `scripts/make-icons` redraws them |
 | `.github/workflows` | CI, Android CI and the release build |
 

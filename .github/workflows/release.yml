@@ -138,6 +138,19 @@ jobs:
           7z x -y -ortlsdr rtlsdr.zip > /dev/null
           cp rtlsdr/x64/rtlsdr.dll "$system32/vcruntime140.dll" "dist/$PACKAGE/"
 
+      # The installer wraps the same files; see installer/dmps.iss.
+      - name: Build the installer (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup --yes --no-progress }
+          # The installer wants a plain version number: v1.2.3 is 1.2.3, and
+          # a build that isn't of a tag is 0.0.0.
+          $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME.TrimStart('v') } else { '0.0.0' }
+          & $iscc "/DAppVersion=$version" "/DSourceDir=..\dist\$env:PACKAGE" "/F$($env:PACKAGE)-setup" installer\dmps.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Archive
         run: |
           cd dist
@@ -153,6 +166,7 @@ jobs:
           path: |
             dist/*.zip
             dist/*.tar.gz
+            dist/*-setup.exe
           if-no-files-found: error
 
   # The Android app is a project of its own (mobile/), built on gpui-mobile.

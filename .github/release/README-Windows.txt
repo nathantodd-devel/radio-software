@@ -22,6 +22,10 @@ Channels are kept in %APPDATA%\dmps\channels.db.
 For a portable install, create a folder called dmps beside the
 programs: if it exists, the channels are kept there instead.
 
+To update, run `scanner update` in a terminal. If you used the installer and
+left automatic updates on, a scheduled task does it for you; update.log in
+this folder says what it did.
+
 Bundled libraries:
   airspy.dll, libusb-1.0.dll, pthreadVC2.dll
       from the official Airspy host tools 1.0.10,

@@ -1636,6 +1636,18 @@ fn main() {
             println!("scanner-ui {} ({TITLE})", scanner::update::VERSION);
             return;
         }
+        // What the installer's updater task runs: this program rather than
+        // `scanner update` because on Windows it has no console to flash up.
+        Some("--update-quietly") => {
+            let installed_in = std::env::current_exe()
+                .ok()
+                .and_then(|exe| Some(exe.parent()?.to_path_buf()));
+            let updated = match installed_in {
+                Some(dir) if !scanner::update::is_build_dir(&dir) => scanner::update::update_quietly(&dir),
+                _ => Err("not an installed copy".to_string()),
+            };
+            std::process::exit(if updated.is_ok() { 0 } else { 1 })
+        }
         Some("-h" | "--help") => {
             println!("usage: scanner-ui    the {TITLE} desktop app\n       scanner-ui --version");
             return;
