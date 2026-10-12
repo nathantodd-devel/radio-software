@@ -90,6 +90,9 @@ pub enum Message {
     },
     /// How the channels of one of the system's sixteen bands are numbered.
     Band { id: u8, band: Band },
+    /// Which network and system this is: what Phase 2 traffic is scrambled
+    /// with, along with the network access code.
+    Network { wacn: u32, system: u16 },
 }
 
 /// One of a system's bands: where its channel 0 is and how far apart
@@ -162,6 +165,14 @@ pub fn read(data: &[u8; DATA_BITS / 8]) -> Option<Block> {
         // Identifier updates: for 700/800 MHz, VHF and UHF, and TDMA, whose
         // channel type says how many slots share a frequency.
         (0, 0x3d) | (0, 0x34) => [Some(band(1)), None],
+        // Network status: location area, WACN (20 bits), system (12 bits).
+        (0, 0x3b) => [
+            Some(Message::Network {
+                wacn: u32::from(data[3]) << 12 | u32::from(data[4]) << 4 | u32::from(data[5] >> 4),
+                system: u16::from(data[5] & 0xf) << 8 | u16::from(data[6]),
+            }),
+            None,
+        ],
         (0, 0x33) => {
             let slots = match data[2] & 0xf {
                 0 | 1 => 1,

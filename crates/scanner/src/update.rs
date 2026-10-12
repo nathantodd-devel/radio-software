@@ -17,6 +17,14 @@ use sha2::{Digest, Sha256};
 /// This program's version.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// The key releases are signed with, and its fingerprint: an update is
+/// installed only if this key signed it.
+const PGP_KEY: &str = include_str!("../../../signing-key.asc");
+const PGP_KEY_ID: [u8; 20] = [
+    0xE5, 0x4C, 0x10, 0x41, 0x23, 0xA2, 0x2A, 0x44, 0xD2, 0x69, 0x56, 0xF7, 0x4B, 0x86, 0xF8, 0xE2, 0x88, 0x88, 0x92,
+    0xDC,
+];
+
 const LATEST_RELEASE: &str = "https://api.github.com/repos/nathantodd-devel/radio-software/releases/latest";
 /// GitHub wants to know who is asking.
 const USER_AGENT: &str = concat!("dmps/", env!("CARGO_PKG_VERSION"));
@@ -38,6 +46,8 @@ pub struct Package {
     pub size: u64,
     /// Its SHA-256 as hex, when GitHub says.
     pub sha256: Option<String>,
+    /// Where its signature is, if the release has one.
+    pub signature_url: Option<String>,
 }
 
 /// How release packages for this platform are named: "linux-x86_64". `None`
@@ -97,8 +107,13 @@ fn release(json: &str, platform: Option<&str>) -> Result<Release, String> {
                 .any(|ext| name.ends_with(&format!("-{platform}{ext}")))
         };
         let asset = assets.iter().find(|asset| asset["name"].as_str().is_some_and(ours))?;
+        let name = asset["name"].as_str()?;
+        let signature = assets
+            .iter()
+            .find(|asset| asset["name"].as_str() == Some(&format!("{name}.asc")));
         Some(Package {
-            name: asset["name"].as_str()?.to_string(),
+            signature_url: signature.and_then(|asset| Some(asset["browser_download_url"].as_str()?.to_string())),
+            name: name.to_string(),
             url: asset["browser_download_url"].as_str()?.to_string(),
             size: asset["size"].as_u64().unwrap_or(0),
             sha256: asset["digest"]
@@ -115,7 +130,7 @@ fn release(json: &str, platform: Option<&str>) -> Result<Release, String> {
 
 /// Download `package` to the file `to`, telling `progress` how many bytes
 /// have arrived so far. Fails, leaving no file, if what arrives isn't what
-/// GitHub says the package is.
+/// GitHub says the package is, or wasn't signed with the project's key.
 pub fn download(package: &Package, to: &Path, mut progress: impl FnMut(u64)) -> Result<(), String> {
     let failed = |e: &dyn std::fmt::Display| format!("can't download {}: {e}", package.name);
     let reply = ureq::get(&package.url)
@@ -148,10 +163,43 @@ pub fn download(package: &Package, to: &Path, mut progress: impl FnMut(u64)) -> 
         _ => Ok(()),
     });
     drop(file);
+    // The checksum is GitHub's word; the signature is the project's own, so
+    // a package put there by anyone else is turned away.
+    let result = result.and_then(|()| {
+        let url = package
+            .signature_url
+            .as_ref()
+            .ok_or_else(|| failed(&"the release isn't signed (yet), so it won't be installed"))?;
+        let signature = ureq::get(url)
+            .set("User-Agent", USER_AGENT)
+            .call()
+            .map_err(|e| failed(&e))?
+            .into_string()
+            .map_err(|e| failed(&e))?;
+        let content = fs::read(to).map_err(|e| failed(&e))?;
+        verify(&content, &signature, PGP_KEY, &PGP_KEY_ID).map_err(|e| failed(&e))
+    });
     if result.is_err() {
         fs::remove_file(to).ok();
     }
     result
+}
+
+/// Check that `signature` (a detached OpenPGP signature, as text) is of
+/// `content` and was made by the key `key`, whose fingerprint is `key_id`.
+fn verify(content: &[u8], signature: &str, key: &str, key_id: &[u8]) -> Result<(), String> {
+    use pgp::composed::{Deserializable, DetachedSignature, SignedPublicKey};
+    use pgp::types::KeyDetails;
+
+    let (key, _) = SignedPublicKey::from_string(key).map_err(|e| format!("the signing key can't be read: {e}"))?;
+    if key.fingerprint().as_bytes() != key_id {
+        return Err("the signing key isn't the project's".into());
+    }
+    let (signature, _) =
+        DetachedSignature::from_string(signature).map_err(|e| format!("its signature can't be read: {e}"))?;
+    signature
+        .verify(&key, content)
+        .map_err(|_| "it isn't signed with the project's key".to_string())
 }
 
 /// Bring the copy installed in `dir` up to the newest release, if there is a
@@ -316,6 +364,7 @@ mod tests {
             {"name": "dmps-v1.2.0-android-arm64.apk", "browser_download_url": "https://example/apk", "size": 5},
             {"name": "dmps-v1.2.0-linux-x86_64.tar.gz", "browser_download_url": "https://example/linux",
              "size": 7, "digest": "sha256:abc123"},
+            {"name": "dmps-v1.2.0-linux-x86_64.tar.gz.asc", "browser_download_url": "https://example/linux.asc"},
             {"name": "dmps-v1.2.0-windows-x86_64.zip", "browser_download_url": "https://example/windows", "size": 9}
         ]}"#;
         let found = release(json, Some("linux-x86_64")).unwrap();
@@ -323,6 +372,7 @@ mod tests {
         let package = found.package.unwrap();
         assert_eq!((package.url.as_str(), package.size), ("https://example/linux", 7));
         assert_eq!(package.sha256.as_deref(), Some("abc123"));
+        assert_eq!(package.signature_url.as_deref(), Some("https://example/linux.asc"));
         // No checksum given, and a platform with no package.
         assert!(
             release(json, Some("windows-x86_64"))
@@ -335,6 +385,37 @@ mod tests {
         assert!(release(json, Some("macos-arm64")).unwrap().package.is_none());
         assert!(release(json, None).unwrap().package.is_none());
         assert!(release("{}", Some("linux-x86_64")).is_err());
+    }
+
+    const PACKAGE: &[u8] = include_bytes!("testdata/package.bin");
+    const SIGNATURE: &str = include_str!("testdata/package.bin.asc");
+    /// A key made for these tests, which signed the package above.
+    const TEST_KEY: &str = include_str!("testdata/test-key.asc");
+    const TEST_KEY_ID: [u8; 20] = [
+        0x2F, 0x10, 0x2D, 0xBE, 0x28, 0x7C, 0x93, 0x16, 0xBC, 0xFC, 0xAD, 0x07, 0xC4, 0xDE, 0xE5, 0x2F, 0x04, 0x17,
+        0x19, 0x5D,
+    ];
+
+    #[test]
+    fn checks_signatures() {
+        assert_eq!(verify(PACKAGE, SIGNATURE, TEST_KEY, &TEST_KEY_ID), Ok(()));
+        // Changed since it was signed.
+        assert!(verify(b"another package\n", SIGNATURE, TEST_KEY, &TEST_KEY_ID).is_err());
+        assert!(verify(PACKAGE, "not a signature", TEST_KEY, &TEST_KEY_ID).is_err());
+        // The key swapped for another, the signature with it.
+        assert_eq!(
+            verify(PACKAGE, SIGNATURE, TEST_KEY, &PGP_KEY_ID).unwrap_err(),
+            "the signing key isn't the project's"
+        );
+    }
+
+    #[test]
+    fn only_the_projects_key_will_do() {
+        // The key shipped is the one named, and what another key signed fails.
+        assert_eq!(
+            verify(PACKAGE, SIGNATURE, PGP_KEY, &PGP_KEY_ID).unwrap_err(),
+            "it isn't signed with the project's key"
+        );
     }
 
     #[test]

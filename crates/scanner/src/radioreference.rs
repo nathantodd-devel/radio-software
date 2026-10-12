@@ -118,12 +118,13 @@ fn talkgroups(xml: &str) -> Result<(Plan, Vec<String>), String> {
     returned(xml, |list| {
         let (mut plan, mut encrypted, mut other_modes) = (Plan::default(), 0, 0);
         for tg in list.children().filter(Node::is_element) {
-            // D is digital; an E after it, or enc of 2, means always
-            // encrypted. Anything else is analog or P25 Phase 2.
+            // D is digital and T is digital in time slots (Phase 2); an E
+            // after it, or enc of 2, means always encrypted. Anything else
+            // is analog.
             let mode = text(tg, "tgMode");
-            if mode == "DE" || text(tg, "enc") == "2" {
+            if matches!(mode, "DE" | "TE") || text(tg, "enc") == "2" {
                 encrypted += 1;
-            } else if !matches!(mode, "D" | "De") {
+            } else if !matches!(mode, "D" | "De" | "T" | "Te") {
                 other_modes += 1;
             } else if let Ok(id) = text(tg, "tgDec").parse() {
                 plan.entries.push(entry(
@@ -135,7 +136,7 @@ fn talkgroups(xml: &str) -> Result<(Plan, Vec<String>), String> {
         }
         let mut notes = Vec::new();
         count_note(&mut notes, encrypted, "talkgroups left out: encrypted");
-        count_note(&mut notes, other_modes, "talkgroups left out: not P25 Phase 1 voice");
+        count_note(&mut notes, other_modes, "talkgroups left out: not P25 voice");
         Ok((plan, notes))
     })
 }

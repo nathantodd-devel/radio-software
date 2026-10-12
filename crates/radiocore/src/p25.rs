@@ -88,6 +88,9 @@ pub enum P25Frame {
         freq_hz: f64,
         /// The radio calling, when the message says.
         source: Option<u32>,
+        /// For a Phase 2 call, which of the frequency's two time slots it
+        /// is in; see [`crate::P25p2Channel`].
+        slot: Option<u8>,
     },
 }
 
@@ -113,6 +116,8 @@ pub struct P25Channel {
     since_control: Option<usize>,
     /// How the system numbers its channels, as its control channel has said.
     bands: [Option<tsbk::Band>; 16],
+    /// The network and system the control channel says this is.
+    network: Option<(u32, u16)>,
 }
 
 /// A frame whose sync has been found and that is waiting for its samples.
@@ -147,7 +152,14 @@ impl P25Channel {
             since_voice: 0,
             since_control: None,
             bands: [None; 16],
+            network: None,
         }
+    }
+
+    /// For a control channel: the network (WACN), system and network access
+    /// code it has announced, which its Phase 2 traffic is scrambled with.
+    pub fn identity(&self) -> Option<(u32, u16, u16)> {
+        self.network.map(|(wacn, system)| (wacn, system, self.nac))
     }
 
     /// Whether this is a control channel: one has been heard on it lately.
@@ -383,6 +395,7 @@ impl P25Channel {
             for message in block.messages.into_iter().flatten() {
                 match message {
                     tsbk::Message::Band { id, band } => self.bands[usize::from(id & 15)] = Some(band),
+                    tsbk::Message::Network { wacn, system } => self.network = Some((wacn, system)),
                     tsbk::Message::Grant {
                         talkgroup,
                         channel,
@@ -391,10 +404,12 @@ impl P25Channel {
                         // Until the band's numbering has been heard, the
                         // channel number says nothing.
                         if let Some(band) = self.bands[usize::from(channel >> 12)] {
+                            let number = channel & 0xfff;
                             sink(P25Frame::Grant {
                                 talkgroup,
-                                freq_hz: band.frequency(channel & 0xfff),
+                                freq_hz: band.frequency(number),
                                 source,
+                                slot: (band.slots > 1).then(|| (number % band.slots) as u8),
                             });
                         }
                     }
@@ -550,8 +565,10 @@ mod tests {
                     talkgroup,
                     freq_hz,
                     source,
+                    slot,
                 } = frame
                 {
+                    assert_eq!(slot, None);
                     grants.push((talkgroup, freq_hz, source));
                 }
             });

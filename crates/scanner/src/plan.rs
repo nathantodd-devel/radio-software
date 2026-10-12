@@ -511,10 +511,11 @@ fn radioreference_conventional(text: &str, name: &str) -> Result<(Plan, Vec<Stri
 fn radioreference_talkgroups(text: &str, name: &str) -> Result<(Plan, Vec<String>), String> {
     let (mut plan, mut encrypted, mut other_modes) = (Plan::default(), 0, 0);
     for (lineno, get) in csv_rows(text) {
-        // D is digital; a trailing E or e means always or sometimes encrypted.
+        // D is digital and T is digital in time slots (Phase 2); a trailing
+        // E or e means always or sometimes encrypted.
         match get("Mode").as_str() {
-            "D" | "De" => {}
-            "DE" => {
+            "D" | "De" | "T" | "Te" => {}
+            "DE" | "TE" => {
                 encrypted += 1;
                 continue;
             }
@@ -535,7 +536,7 @@ fn radioreference_talkgroups(text: &str, name: &str) -> Result<(Plan, Vec<String
     }
     let mut notes = Vec::new();
     count_note(&mut notes, encrypted, "talkgroups left out: encrypted");
-    count_note(&mut notes, other_modes, "talkgroups left out: not P25 Phase 1 voice");
+    count_note(&mut notes, other_modes, "talkgroups left out: not P25 voice");
     Ok((plan, notes))
 }
 

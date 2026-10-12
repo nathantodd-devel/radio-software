@@ -746,7 +746,7 @@ impl ScannerView {
                         Editing::RadioReference { .. } => {
                             "Needs a RadioReference premium subscription and an application key. A county \
                              import makes one system per category and can take a minute. Analog FM and \
-                             unencrypted P25 Phase 1 are imported; everything else is left out."
+                             unencrypted P25 are imported; everything else is left out."
                         }
                         Editing::Channel { .. } => {
                             "Tab moves between fields, Enter saves, Escape cancels. \

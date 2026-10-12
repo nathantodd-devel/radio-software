@@ -14,7 +14,7 @@ written in Rust.
 Instead of stepping through channels one at a time like a traditional scanner, it receives a
 whole band at once (about 9 MHz on an Airspy R2, about 1.9 MHz on an RTL-SDR) and demodulates
 every channel in it simultaneously, so nothing is missed while it is "somewhere else". It decodes analog FM and
-P25 Phase 1 digital voice, and comes as a desktop app and a command-line tool.
+P25 digital voice (Phase 1 and Phase 2), and comes as a desktop app and a command-line tool.
 
 It ships with channel lists for San Mateo County, California, and can import any other area.
 
@@ -50,6 +50,10 @@ It ships with channel lists for San Mateo County, California, and can import any
   can't take in all of a system's frequencies at once (an RTL-SDR, say), it follows the control
   channel instead: it waits there and goes to each call's frequency as the call is announced.
   Encrypted calls are skipped.
+- **P25 Phase 2** voice on trunked systems, where each frequency carries two calls taking turns
+  in time slots. The system's control channel has to be among the frequencies listed: it says
+  which talkgroup is in which slot, and what the traffic is scrambled with. Both slots of a
+  frequency are received at once. Encrypted calls are skipped.
 - **Three scan modes:** receive one band; hop between bands when the selected systems are too
   far apart; or scan one channel at a time at a low sample rate for less CPU and USB load.
 - **Two kinds of receiver:** Airspy R2 and Mini, and RTL-SDR dongles (RTL2832U with an R820T2
@@ -87,6 +91,7 @@ This is a young project. What has and has not been exercised:
 | Android app | Receives on a Pixel 10 with a radio on a USB adapter, in the foreground and the background. Checked from the phone's own figures (calls logged, no audio underruns); the sound itself judged only by ear, by its owner |
 | Several receivers at once | Tested with two and three simulated receivers; never run with two real radios. Both are processed on one CPU core, so two radios at 10 MSPS may be more than a slower computer keeps up with |
 | RTL-SDR | Tested on air with an R820T dongle on Linux: analog FM and P25 Phase 1 |
+| P25 Phase 2 | Tested on air on the BART system with an Airspy R2: calls are logged with their talkgroups and radios, and recorded. The speech has not been listened to by a person. Tried on one system only, and only with every frequency in one band; not with an RTL-SDR following the control channel |
 | P25 control-channel following | Tested on air on the San Mateo County system with an RTL-SDR: grants decode and the receiver goes to the calls |
 | DCS squelch | Tested with synthetic signals only; never tried on a real DCS channel |
 | Editing and importing in the web page | Tested in Chrome on Linux, driven by script |
@@ -94,7 +99,7 @@ This is a young project. What has and has not been exercised:
 | Audio on Windows and macOS | Shares the buffering the Android app uses; never run |
 | Airspy Mini | Should work (sample rates are read from the device); untested |
 
-Not supported: P25 Phase 2, DMR, NXDN, other SDR hardware, and
+Not supported: DMR, NXDN, other SDR hardware, and
 RTL-SDR direct sampling (HF).
 
 ## Requirements
@@ -152,12 +157,17 @@ scanner --version         # scanner-ui and scanner-web take --version too
 ```
 
 `scanner update` asks GitHub for the newest release and, if it is newer, downloads the package
-for your computer, checks it against the checksum GitHub publishes, and replaces the programs
-in the folder `scanner` is in (`scanner-ui`, `scanner-web` and its page included). Your channels
+for your computer, checks it against the checksum GitHub publishes and against its signature,
+and replaces the programs in the folder `scanner` is in (`scanner-ui`, `scanner-web` and its page included). Your channels
 and settings are not touched. Restart anything that was running. It needs the `tar` command,
 which Linux, macOS and Windows 10 and later all have. The programs never look for updates by
 themselves, and a copy built from source is updated with `git pull` and `cargo build` instead.
 On Android, install the new APK from the releases page.
+
+An update is installed only if it was signed with the project's signing key, a copy of which is
+built into the program: a package that isn't signed, or that anyone else signed, is refused.
+A release whose signatures haven't been added yet (see [Continuous integration](#continuous-integration)) is refused the
+same way until they are.
 
 **Automatic updates on Windows.** The installer offers to set up a scheduled task that checks
 GitHub every six hours and installs a new release when there is one. Installed for everyone, the
@@ -389,7 +399,7 @@ application key, which RadioReference issues to developers on request. The IDs a
 in the page addresses (`radioreference.com/db/sid/6919`, `.../db/browse/ctid/223`). The app
 remembers your username and key, never your password.
 
-In every case only analog FM and unencrypted P25 Phase 1 are imported; the importer reports
+In every case only analog FM and unencrypted P25 are imported; the importer reports
 what it left out.
 
 ## Themes
@@ -541,7 +551,8 @@ Things to know:
   as downloadable artifacts and publishes nothing.
 - Release downloads are signed with the project's GPG key: by the workflow if the private key
   is in the `GPG_PRIVATE_KEY` secret (with `GPG_PASSPHRASE` if it has one), otherwise by running
-  `scripts/sign-release v0.4.0` afterwards, which keeps the key on your own computer.
+  `scripts/sign-release v0.4.0` afterwards, which keeps the key on your own computer. Until a
+  release is signed, nobody's copy will update to it: the updater installs signed packages only.
 - No signing secrets are set in the repository, so released APKs are signed with a debug key:
   they install, but can't be updated in place by one signed differently. Setting
   `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and
@@ -559,7 +570,7 @@ Things to know:
 
 | Path | What it is |
 |---|---|
-| `crates/radiocore` | DSP: wideband channelizer, FM demodulator with tone squelch, P25 Phase 1 decoder |
+| `crates/radiocore` | DSP: wideband channelizer, FM demodulator with tone squelch, P25 Phase 1 and Phase 2 decoders |
 | `crates/scanner` | The engine (receive loop, scheduling, recording), channel database, importers, and the `scanner` CLI |
 | `crates/scanner-ui` | The desktop app, built with [GPUI](https://www.gpui.rs) |
 | `crates/scanner-web` | The scanner as a web server: HTTP for the page, a WebSocket for data, controls and audio |
@@ -630,7 +641,7 @@ a crime, and about repeating what you hear. Check the rules where you are. This 
 not decrypt anything.
 
 P25 voice decoding uses a third-party vocoder crate that carries its own patent notice; this
-project uses only its full-rate (Phase 1) codec. IMBE and AMBE are trademarks of Digital Voice
+project uses its full-rate (Phase 1) and half-rate (Phase 2) codecs. IMBE and AMBE are trademarks of Digital Voice
 Systems, Inc. Channel data shipped with the project was compiled from RadioReference.com.
 
 ## License

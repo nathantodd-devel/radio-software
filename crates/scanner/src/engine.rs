@@ -13,7 +13,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use chrono::Local;
-use radiocore::{Channelizer, Complex32, NfmChannel, NfmConfig, P25Channel, P25Frame};
+use radiocore::{Channelizer, Complex32, NfmChannel, NfmConfig, P25Channel, P25Frame, P25p2Channel, P25p2Frame};
 use receiver::{Block, Driver, Receiver};
 
 use crate::plan::{self, BIN_HZ, Entry, Kind, Listener, Plan};
@@ -702,7 +702,7 @@ enum Rx {
     P25(Box<P25Rx>),
 }
 
-/// A P25 frequency, and the call on it if there is one.
+/// A P25 frequency, and the calls on it.
 #[derive(Default)]
 struct P25Rx {
     /// The trunked system this frequency belongs to, if it is one.
@@ -712,6 +712,68 @@ struct P25Rx {
     fixed: Option<(usize, Option<u16>)>,
     channel: P25Channel,
     frames: Vec<P25Frame>,
+    /// The same frequency taken as Phase 2, when the system uses it so.
+    tdma: Tdma,
+    /// The calls there can be at once: a Phase 1 call, then one in each of
+    /// a Phase 2 channel's two time slots.
+    calls: [Call; 3],
+}
+
+/// How long a control channel's word that a talkgroup is in a time slot is
+/// good for, in channel samples, without its being repeated or the call
+/// being heard.
+const TDMA_GRANT_SAMPLES: usize = 2 * CHANNEL_RATE as usize;
+
+/// A talkgroup a control channel has said is in a time slot.
+struct Granted {
+    talkgroup: u16,
+    unit: Option<u32>,
+    /// Channel samples since it was last said, or the call last heard.
+    age: usize,
+}
+
+/// A frequency taken as Phase 2. It is listened to only while the control
+/// channel says there are calls on it: the control channel is also the only
+/// thing that says whose they are.
+#[derive(Default)]
+struct Tdma {
+    channel: P25p2Channel,
+    frames: Vec<P25p2Frame>,
+    granted: [Option<Granted>; 2],
+    listening: bool,
+}
+
+impl Tdma {
+    fn process(&mut self, samples: &[Complex32]) {
+        for granted in &mut self.granted {
+            if let Some(grant) = granted {
+                grant.age += samples.len();
+                if grant.age > TDMA_GRANT_SAMPLES {
+                    *granted = None;
+                }
+            }
+        }
+        if self.granted.iter().all(Option::is_none) {
+            self.stop();
+            return;
+        }
+        self.listening = true;
+        let frames = &mut self.frames;
+        self.channel.process(samples, |frame| frames.push(frame));
+    }
+
+    fn stop(&mut self) {
+        if std::mem::take(&mut self.listening) {
+            self.channel.resync();
+        }
+        self.granted = [None, None];
+        self.frames.clear();
+    }
+}
+
+/// One conversation on a P25 frequency.
+#[derive(Default)]
+struct Call {
     /// Plan entry this call is playing on.
     row: Option<usize>,
     talkgroup: Option<u16>,
@@ -724,7 +786,7 @@ struct P25Rx {
     last: [f32; 3],
 }
 
-impl P25Rx {
+impl Call {
     /// Queue 8 kHz speech for playback at 16 kHz.
     fn queue(&mut self, pcm: &[i16]) {
         for &s in pcm {
@@ -737,14 +799,15 @@ impl P25Rx {
             self.last = [b, c, x];
         }
     }
+}
 
-    fn hang_up(&mut self) {
-        *self = Self {
-            system: self.system,
-            fixed: self.fixed,
-            channel: std::mem::take(&mut self.channel),
-            ..Self::default()
-        };
+impl P25Rx {
+    /// Drop everything in progress: the receiver is being tuned elsewhere.
+    fn leave(&mut self) {
+        self.channel.resync();
+        self.frames.clear();
+        self.tdma.stop();
+        self.calls = Default::default();
     }
 }
 
@@ -843,7 +906,7 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
     let mut layouts = Vec::new();
     // Every trunked system's frequencies, and the (receiver, band) each is
     // listened to on: where a call the control channel announces will be.
-    let mut trunked_at: Vec<(i64, f64, usize, usize)> = Vec::new();
+    let mut trunked_at: Vec<(i64, f64, usize, usize, usize)> = Vec::new();
     for (t, (found, share)) in used.iter().enumerate() {
         let mut bands: Vec<Band> = Vec::new();
         for (b, tuning) in share.iter().enumerate() {
@@ -883,7 +946,7 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
                                 row_place[row] = Some((t, b));
                             }
                         }
-                        trunked_at.push((system, freq_hz, t, b));
+                        trunked_at.push((system, freq_hz, t, b, rxs.len()));
                         Rx::P25(Box::new(P25Rx {
                             system,
                             ..P25Rx::default()
@@ -950,8 +1013,9 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
     let mut audio = vec![Vec::with_capacity(audio_len); rows];
     let mut open = vec![false; rows];
     let mut open_blocks = vec![0u32; rows];
-    // What feeds each open entry: (receiver, channel of its tuned band).
-    let mut row_rx: Vec<Option<(usize, usize)>> = vec![None; rows];
+    // What feeds each open entry: (receiver, channel of its tuned band, and
+    // for P25 which of the channel's calls).
+    let mut row_rx: Vec<Option<(usize, usize, usize)>> = vec![None; rows];
     // The radio heard on each open P25 entry, once it has said who it is.
     let mut row_unit: Vec<Option<u32>> = vec![None; rows];
     let mut recorders: Vec<Option<(wav::Writer, PathBuf)>> = (0..rows).map(|_| None).collect();
@@ -983,9 +1047,18 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
         announce(t, tuner, &mut on_event);
     }
 
-    // Calls announced by control channels in the block being worked on:
-    // (system, talkgroup, frequency).
-    let mut grants: Vec<(i64, u16, f64)> = Vec::new();
+    // Calls announced by control channels in the block being worked on.
+    struct Grant {
+        system: i64,
+        talkgroup: u16,
+        freq_hz: f64,
+        unit: Option<u32>,
+        /// For a Phase 2 call: its time slot, and the network, system and
+        /// site the control channel says it is (if it has yet).
+        slot: Option<u8>,
+        identity: Option<(u32, u16, u16)>,
+    }
+    let mut grants: Vec<Grant> = Vec::new();
 
     'scan: while !controls.stop.load(Relaxed) {
         // The same stretch of time from every receiver.
@@ -1008,11 +1081,12 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
                 Rx::Nfm { channel, row } => {
                     audio[*row].clear();
                     open[*row] = channel.process(samples, floor_cap, &mut audio[*row]) && !controls.skipped(*row);
-                    row_rx[*row] = Some((t, i));
+                    row_rx[*row] = Some((t, i, 0));
                 }
                 Rx::P25(rx) => {
                     let frames = &mut rx.frames;
                     rx.channel.process(samples, |frame| frames.push(frame));
+                    rx.tdma.process(samples);
                 }
             });
 
@@ -1031,47 +1105,99 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
                                 // The talkgroup can arrive a frame after the voice does.
                                 None => talkgroup_row(rx.system, talkgroup),
                             };
-                            if rx.row != row && !rx.playing {
-                                if let Some(old) = rx.row.take() {
+                            let call = &mut rx.calls[0];
+                            if call.row != row && !call.playing {
+                                if let Some(old) = call.row.take() {
                                     row_rx[old] = None;
                                 }
                                 // The same call can be on two sites' frequencies.
                                 if let Some(row) = row.filter(|&row| row_rx[row].is_none()) {
-                                    row_rx[row] = Some((t, i));
-                                    rx.row = Some(row);
-                                    rx.talkgroup = talkgroup;
+                                    row_rx[row] = Some((t, i, 0));
+                                    call.row = Some(row);
+                                    call.talkgroup = talkgroup;
                                 }
                             }
-                            if let Some(row) = rx.row {
-                                rx.unit = source.or(rx.unit);
-                                row_unit[row] = rx.unit;
-                                rx.queue(&pcm);
+                            if let Some(row) = call.row {
+                                call.unit = source.or(call.unit);
+                                row_unit[row] = call.unit;
+                                call.queue(&pcm);
                             }
                         }
-                        P25Frame::End => rx.ended = true,
+                        P25Frame::End => rx.calls[0].ended = true,
                         // A control channel saying where a call is. Only
                         // a trunked system's own is listened to.
-                        P25Frame::Grant { talkgroup, freq_hz, .. } => {
+                        P25Frame::Grant {
+                            talkgroup,
+                            freq_hz,
+                            source,
+                            slot,
+                        } => {
                             if rx.fixed.is_none() {
-                                grants.push((rx.system, talkgroup, freq_hz));
+                                grants.push(Grant {
+                                    system: rx.system,
+                                    talkgroup,
+                                    freq_hz,
+                                    unit: source,
+                                    slot,
+                                    identity: rx.channel.identity(),
+                                });
                             }
                         }
                     }
                 }
-                let Some(row) = rx.row else {
-                    rx.ended = false;
-                    continue;
-                };
-                rx.playing |= rx.fifo.len() >= P25_PREBUFFER || rx.ended;
-                audio[row].clear();
-                open[row] = false;
-                if rx.playing {
-                    if rx.fifo.is_empty() && rx.ended {
-                        row_rx[row] = None;
-                        rx.hang_up();
-                    } else {
-                        audio[row].extend((0..audio_len).map(|_| rx.fifo.pop_front().unwrap_or(0.0)));
-                        open[row] = !controls.skipped(row);
+                for frame in std::mem::take(&mut rx.tdma.frames) {
+                    match frame {
+                        P25p2Frame::Voice { slot, pcm } => {
+                            // Whose the speech is, only the control channel says.
+                            let Some(granted) = &mut rx.tdma.granted[usize::from(slot)] else {
+                                continue;
+                            };
+                            granted.age = 0;
+                            let which = 1 + usize::from(slot);
+                            let call = &mut rx.calls[which];
+                            // Another talkgroup's turn in the slot is another call.
+                            if call.talkgroup != Some(granted.talkgroup) {
+                                if let Some(old) = call.row {
+                                    row_rx[old] = None;
+                                    open[old] = false;
+                                }
+                                *call = Call {
+                                    talkgroup: Some(granted.talkgroup),
+                                    ..Call::default()
+                                };
+                            }
+                            let row = talkgroup_row(rx.system, call.talkgroup);
+                            if call.row.is_none()
+                                && let Some(row) = row.filter(|&row| row_rx[row].is_none())
+                            {
+                                row_rx[row] = Some((t, i, which));
+                                call.row = Some(row);
+                            }
+                            if let Some(row) = call.row {
+                                call.unit = granted.unit.or(call.unit);
+                                row_unit[row] = call.unit;
+                                call.queue(&pcm);
+                            }
+                        }
+                        P25p2Frame::End { slot } => rx.calls[1 + usize::from(slot)].ended = true,
+                    }
+                }
+                for call in &mut rx.calls {
+                    let Some(row) = call.row else {
+                        call.ended = false;
+                        continue;
+                    };
+                    call.playing |= call.fifo.len() >= P25_PREBUFFER || call.ended;
+                    audio[row].clear();
+                    open[row] = false;
+                    if call.playing {
+                        if call.fifo.is_empty() && call.ended {
+                            row_rx[row] = None;
+                            *call = Call::default();
+                        } else {
+                            audio[row].extend((0..audio_len).map(|_| call.fifo.pop_front().unwrap_or(0.0)));
+                            open[row] = !controls.skipped(row);
+                        }
                     }
                 }
             }
@@ -1079,14 +1205,33 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
 
         // A wanted call announced on a frequency that a receiver isn't on at
         // the moment: that receiver is sent there.
-        for (system, talkgroup, freq_hz) in grants.drain(..) {
-            let wanted = talkgroup_row(system, Some(talkgroup)).is_some_and(|row| !controls.skipped(row));
+        for grant in grants.drain(..) {
+            let wanted = talkgroup_row(grant.system, Some(grant.talkgroup)).is_some_and(|row| !controls.skipped(row));
             let place = trunked_at
                 .iter()
-                .find(|at| at.0 == system && (at.1 - freq_hz).abs() < GRANT_MATCH_HZ);
-            if let (true, Some(&(_, _, t, band))) = (wanted, place)
-                && tuners[t].tuned != band
+                .find(|at| at.0 == grant.system && (at.1 - grant.freq_hz).abs() < GRANT_MATCH_HZ);
+            let (true, Some(&(_, _, t, band, i))) = (wanted, place) else {
+                continue;
+            };
+            // A Phase 2 call: the frequency is listened to that way, for the
+            // talkgroup in its time slot.
+            if let (Some(slot), Some((wacn, system, nac)), Rx::P25(rx)) =
+                (grant.slot, grant.identity, &mut tuners[t].bands[band].rxs[i])
+                && let Some(granted) = rx.tdma.granted.get_mut(usize::from(slot))
             {
+                rx.tdma.channel.set_identity(wacn, system, nac);
+                // Reminders that a call is still going don't say who is talking.
+                let unit = match granted {
+                    Some(old) if old.talkgroup == grant.talkgroup => grant.unit.or(old.unit),
+                    _ => grant.unit,
+                };
+                *granted = Some(Granted {
+                    talkgroup: grant.talkgroup,
+                    unit,
+                    age: 0,
+                });
+            }
+            if tuners[t].tuned != band {
                 tuners[t].jump = Some(band);
             }
         }
@@ -1118,7 +1263,7 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
                     match rx {
                         Rx::Nfm { channel, row } => levels[*row] = channel.snr_db(),
                         Rx::P25(rx) => {
-                            if let Some(row) = rx.row {
+                            for row in rx.calls.iter().filter_map(|call| call.row) {
                                 levels[row] = rx.channel.snr_db();
                             }
                         }
@@ -1151,9 +1296,10 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
         for c in 0..rows {
             if open[c] && open_blocks[c] == 0 {
                 let e = &plan.entries[c];
-                let (snr_db, talkgroup, unit) = match row_rx[c].map(|(t, i)| &tuners[t].bands[tuners[t].tuned].rxs[i]) {
-                    Some(Rx::P25(rx)) => (rx.channel.snr_db(), rx.talkgroup, rx.unit),
-                    Some(Rx::Nfm { channel, .. }) => (channel.snr_db(), None, None),
+                let feed = row_rx[c].map(|(t, i, call)| (&tuners[t].bands[tuners[t].tuned].rxs[i], call));
+                let (snr_db, talkgroup, unit) = match feed {
+                    Some((Rx::P25(rx), call)) => (rx.channel.snr_db(), rx.calls[call].talkgroup, rx.calls[call].unit),
+                    Some((Rx::Nfm { channel, .. }, _)) => (channel.snr_db(), None, None),
                     None => (0.0, None, None),
                 };
                 on_event(Event::Opened {
@@ -1247,13 +1393,13 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
                 continue;
             }
             // Whether an entry is being heard, or would be, on this receiver.
-            let here = |row: usize| row_rx[row].or(row_place[row]).is_some_and(|place| place.0 == t);
+            let here = |row: usize| row_rx[row].map(|feed| feed.0).or(row_place[row].map(|place| place.0)) == Some(t);
             let held = controls
                 .pinned()
                 .and_then(|row| row_place[row])
                 .filter(|place| place.0 == t);
             let band = &tuner.bands[tuner.tuned];
-            let in_call = |rx: &Rx| matches!(rx, Rx::P25(rx) if rx.row.is_some());
+            let in_call = |rx: &Rx| matches!(rx, Rx::P25(rx) if rx.calls.iter().any(|call| call.row.is_some()));
             let busy =
                 current.is_some_and(here) || (0..rows).any(|c| open[c] && here(c)) || band.rxs.iter().any(in_call);
             tuner.idle_blocks = if busy { 0 } else { tuner.idle_blocks + 1 };
@@ -1332,12 +1478,11 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
                         row_rx[*row] = None;
                     }
                     Rx::P25(rx) => {
-                        if let Some(row) = rx.row {
+                        for row in rx.calls.iter().filter_map(|call| call.row) {
                             open[row] = false;
                             row_rx[row] = None;
                         }
-                        rx.channel.resync();
-                        rx.hang_up();
+                        rx.leave();
                     }
                 }
             }

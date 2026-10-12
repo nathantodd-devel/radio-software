@@ -32,7 +32,7 @@ the scanner takes turns on each, staying while there is traffic; see --scan.
 
 `import` reads this program's own CSV format or a RadioReference CSV export:
 a conventional frequency list, or a trunked system's talkgroup list together
-with its site list (--sites) for P25 Phase 1 systems.
+with its site list (--sites) for P25 systems.
 
 `radioreference` fetches from RadioReference.com directly. It needs a premium
 account and an application key from RadioReference, given in the environment
