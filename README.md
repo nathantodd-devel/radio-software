@@ -84,13 +84,14 @@ This is a young project. What has and has not been exercised:
 | RadioReference API import | Requests verified against the live service; parsing of real replies untested |
 | RadioReference CSV import | Tested only on hand-made samples |
 | Web version (`scanner-web`) | Tested on air with Chrome on Linux, driven by script: live data, controls, replay and audio delivery. Sound has not been listened to by a person; other browsers, phones and touch scrolling are untested |
-| Android app | Builds and draws on a Pixel 10; receiving is untested with either an Airspy or an RTL-SDR attached |
+| Android app | Receives on a Pixel 10 with a radio on a USB adapter, in the foreground and the background. Checked from the phone's own figures (calls logged, no audio underruns); the sound itself judged only by ear, by its owner |
 | Several receivers at once | Tested with two and three simulated receivers; never run with two real radios. Both are processed on one CPU core, so two radios at 10 MSPS may be more than a slower computer keeps up with |
 | RTL-SDR | Tested on air with an R820T dongle on Linux: analog FM and P25 Phase 1 |
 | P25 control-channel following | Tested on air on the San Mateo County system with an RTL-SDR: grants decode and the receiver goes to the calls |
 | DCS squelch | Tested with synthetic signals only; never tried on a real DCS channel |
 | Editing and importing in the web page | Tested in Chrome on Linux, driven by script |
 | Editing and importing in the Android app | Builds; never run |
+| Audio on Windows and macOS | Shares the buffering the Android app uses; never run |
 | Airspy Mini | Should work (sample rates are read from the device); untested |
 
 Not supported: P25 Phase 2, DMR, NXDN, other SDR hardware, and
@@ -465,7 +466,12 @@ tabs for Channels, Activity, Systems and Settings.
 
 The receiver, an Airspy or an RTL-SDR, plugs into the phone with a USB OTG adapter. Android asks
 whether the app may use it; after that the app opens it through Android's USB manager. With a
-USB hub, more than one is used at once, as on a desktop. An Airspy draws more power than
+USB hub, more than one is used at once, as on a desktop.
+
+While it is scanning the app shows a notification and keeps running, and playing, when it is
+not in front or the screen is off; Android allows that of an app with a media playback service
+running. The Back button leaves it running in the background. Swiping it away from the recent
+apps stops it. An Airspy draws more power than
 some phones supply, so a powered hub may be needed. The app defaults to the lowest sample rate
 to go easy on the battery.
 

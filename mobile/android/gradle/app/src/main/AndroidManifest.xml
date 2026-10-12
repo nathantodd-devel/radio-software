@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8" ?>
 <!--
-  The app is one activity, GpuiActivity (from gpui-mobile), which loads the
+  The app is one activity, MainActivity (gpui-mobile's GpuiActivity with the
+  Back button and closing handled for a scanner), which loads the
   Rust library named by `nativeLibraryName` in build.gradle.kts and lets it
   drive everything from there.
 -->
@@ -9,7 +10,13 @@
     <!-- For importing channels from RadioReference. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
-    <!-- The phone has to be able to act as a USB host for the Airspy. -->
+    <!-- To keep scanning and playing when the app isn't in front (see
+         PlaybackService), and to show the notification that says it is. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- The phone has to be able to act as a USB host for the receiver. -->
     <uses-feature android:name="android.hardware.usb.host" android:required="true" />
 
     <!-- Vulkan is preferred; without it the renderer falls back to OpenGL ES. -->
@@ -32,7 +39,7 @@
         <!-- configChanges keeps the activity (and the Rust side with it) from
              being recreated on rotation and the like. -->
         <activity
-            android:name="dev.gpui.mobile.GpuiActivity"
+            android:name="com.fairhouse.dmps.MainActivity"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|keyboard|navigation|uiMode|density"
             android:exported="true"
             android:launchMode="singleTask"
@@ -59,8 +66,12 @@
             />
         </activity>
 
-        <!-- Helper activities gpui-mobile uses for file pickers, runtime
-             permissions and biometric prompts. -->
+        <!-- Keeps the scanner running and audible in the background. -->
+        <service
+            android:name="com.fairhouse.dmps.PlaybackService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback"
+        />
         <!-- Importing and editing systems, with Android's own text fields. -->
         <activity
             android:name="com.fairhouse.dmps.SystemEditor"
@@ -68,6 +79,8 @@
             android:theme="@android:style/Theme.DeviceDefault"
             android:windowSoftInputMode="adjustResize"
         />
+        <!-- Helper activities gpui-mobile uses for file pickers, runtime
+             permissions and biometric prompts. -->
         <activity
             android:name="dev.gpui.mobile.GpuiPickerActivity"
             android:exported="false"

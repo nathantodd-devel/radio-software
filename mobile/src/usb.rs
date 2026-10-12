@@ -71,6 +71,27 @@ fn devices(list: &str) -> Option<Vec<UsbDevice>> {
         .collect()
 }
 
+/// Say whether the app is scanning, so that Android keeps it running and
+/// audible in the background while it is: the Java class `PlaybackService`
+/// runs for as long as this was last told `true`.
+pub fn keep_running(scanning: bool) {
+    let _ = glue::with_env(|env| {
+        let activity = glue::activity(env)?;
+        let class = glue::find_app_class(env, "com.fairhouse.dmps.PlaybackService")?;
+        env.call_static_method(
+            &class,
+            jni::jni_str!("set"),
+            jni::jni_sig!("(Landroid/app/Activity;Z)V"),
+            &[JValue::Object(&activity), JValue::Bool(scanning)],
+        )
+        .map(|_| ())
+        .map_err(|e| {
+            env.exception_clear();
+            e.to_string()
+        })
+    });
+}
+
 /// Close the connections [`open`] made.
 pub fn close() {
     let _ = glue::with_env(|env| {

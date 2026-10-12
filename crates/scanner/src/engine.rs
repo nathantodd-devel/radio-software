@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering::Relaxed};
 use std::sync::mpsc;
+use std::time::Duration;
 
 use chrono::Local;
 use radiocore::{Channelizer, Complex32, NfmChannel, NfmConfig, P25Channel, P25Frame};
@@ -524,6 +525,10 @@ pub fn usable_span_hz(rate: u32) -> f64 {
     rate as f64 * DEFAULT_USABLE_BANDWIDTH
 }
 
+/// How often a wait for samples looks at whether the scan has been told to
+/// stop, and how long a radio may send nothing before it is given up on.
+const STOP_CHECK: Duration = Duration::from_millis(50);
+const SILENT_RADIO: Duration = Duration::from_secs(3);
 /// With several receivers, how far one may fall behind the others before it
 /// skips ahead, and how far behind it is left: their clocks never quite
 /// agree, and opening each takes a moment.
@@ -613,7 +618,7 @@ impl Input {
     }
 
     /// Fill `iq`, waiting for the samples if need be.
-    fn read(&mut self, iq: &mut [Complex32]) -> Got {
+    fn read(&mut self, iq: &mut [Complex32], stop: &AtomicBool) -> Got {
         let sample = |i: i16, q: i16| Complex32::new(i as f32 / 32768.0, q as f32 / 32768.0);
         match self {
             Input::Stdin(reader, raw) => {
@@ -643,9 +648,26 @@ impl Input {
                         queue.drain(..(queue.len() - samples(CAUGHT_UP_SECS)) & !1);
                     }
                 }
+                // Waiting for the radio is never open-ended: asked to stop, or
+                // with nothing from it for a while, this gives up, so that a
+                // radio that has gone quiet (pulled out, or powered down by a
+                // phone) can't leave the scan, and whoever is waiting for it
+                // to stop, hanging.
+                let mut waited = Duration::ZERO;
                 while queue.len() < iq.len() * 2 {
-                    let Ok(block) = blocks.recv() else { return Got::Ended };
-                    queue.extend(block.iq);
+                    match blocks.recv_timeout(STOP_CHECK) {
+                        Ok(block) => {
+                            queue.extend(block.iq);
+                            waited = Duration::ZERO;
+                        }
+                        Err(mpsc::RecvTimeoutError::Timeout) => {
+                            waited += STOP_CHECK;
+                            if stop.load(Relaxed) || waited >= SILENT_RADIO {
+                                return Got::Ended;
+                            }
+                        }
+                        Err(mpsc::RecvTimeoutError::Disconnected) => return Got::Ended,
+                    }
                 }
                 if *settling > 0 {
                     queue.drain(..iq.len() * 2);
@@ -968,7 +990,7 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
     'scan: while !controls.stop.load(Relaxed) {
         // The same stretch of time from every receiver.
         for (t, tuner) in tuners.iter_mut().enumerate() {
-            match tuner.input.read(&mut tuner.iq) {
+            match tuner.input.read(&mut tuner.iq, &controls.stop) {
                 Got::Samples => tuner.ready = true,
                 Got::Settling => {
                     tuner.ready = false;

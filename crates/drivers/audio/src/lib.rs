@@ -3,6 +3,10 @@
 //! On Linux this pipes to `aplay` (ALSA, and through it PipeWire or
 //! PulseAudio); elsewhere it uses the system's native audio API.
 
+// Used wherever the native audio API is, and tested everywhere.
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+mod jitter;
+
 #[cfg(target_os = "linux")]
 #[path = "aplay.rs"]
 mod backend;

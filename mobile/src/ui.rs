@@ -61,6 +61,9 @@ pub struct ScannerApp {
     systems: Vec<System>,
     /// Systems being scanned together, in the order they were picked.
     selected: Vec<i64>,
+    /// Whether Android has been asked to keep the app running in the
+    /// background, which it is while scanning.
+    kept_running: bool,
     /// What went wrong with the last import or edit, if anything did.
     edit_problem: String,
     /// The radios Android has opened for the app; none until connected.
@@ -103,6 +106,7 @@ impl ScannerApp {
                 .split(',')
                 .filter_map(|id| id.parse().ok())
                 .collect(),
+            kept_running: false,
             edit_problem: String::new(),
             radios: Vec::new(),
             rates: Vec::new(),
@@ -135,6 +139,16 @@ impl ScannerApp {
             loop {
                 cx.background_executor().timer(REFRESH).await;
                 let updated = this.update(cx, |this, cx| {
+                    // Android is told whenever scanning starts or stops, so
+                    // that it lets it carry on in the background.
+                    let scanning = this
+                        .session
+                        .as_ref()
+                        .is_some_and(|s| s.live.lock().unwrap().error.is_none());
+                    if scanning != this.kept_running {
+                        this.kept_running = scanning;
+                        usb::keep_running(scanning);
+                    }
                     this.apply_edits();
                     cx.notify();
                 });
