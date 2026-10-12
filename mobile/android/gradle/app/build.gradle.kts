@@ -7,16 +7,16 @@ plugins {
 }
 
 android {
-    namespace = "dev.airspyscanner"
+    namespace = "com.fairhouse.dmps"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "dev.airspyscanner"
+        applicationId = "com.fairhouse.dmps"
         minSdk = 26          // Vulkan 1.0 is mandatory from API 26+
         targetSdk = 34
         // A release build passes these in (-PversionCode=…, -PversionName=…).
         versionCode = (findProperty("versionCode") as String?)?.toInt() ?: 1
-        versionName = (findProperty("versionName") as String?) ?: "0.3.0"
+        versionName = (findProperty("versionName") as String?) ?: "1.0.0"
 
         // Tell NativeActivity which .so to load.
         // This must match the library name in mobile/Cargo.toml.
@@ -26,7 +26,7 @@ android {
         }
 
         // Forward the library name to the manifest via a placeholder.
-        manifestPlaceholders["nativeLibraryName"] = "airspy_scanner_mobile"
+        manifestPlaceholders["nativeLibraryName"] = "dmps_mobile"
     }
 
     // Release builds are signed with the keystore these environment variables
@@ -89,10 +89,10 @@ android {
         // release mode and stripping again can break backtraces.
         jniLibs {
             keepDebugSymbols += listOf(
-                "*/arm64-v8a/libairspy_scanner_mobile.so",
-                "*/armeabi-v7a/libairspy_scanner_mobile.so",
-                "*/x86_64/libairspy_scanner_mobile.so",
-                "*/x86/libairspy_scanner_mobile.so"
+                "*/arm64-v8a/libdmps_mobile.so",
+                "*/armeabi-v7a/libdmps_mobile.so",
+                "*/x86_64/libdmps_mobile.so",
+                "*/x86/libdmps_mobile.so"
             )
         }
     }

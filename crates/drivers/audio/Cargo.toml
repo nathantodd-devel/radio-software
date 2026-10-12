@@ -1,6 +1,6 @@
 [package]
 name = "audio"
-version = "0.3.0"
+version = "1.0.0"
 edition = "2024"
 license = "AGPL-3.0-only"
 description = "Plays a stream of mono 16-bit audio on the default output device"

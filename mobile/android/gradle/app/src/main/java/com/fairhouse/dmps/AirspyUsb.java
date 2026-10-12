@@ -1,4 +1,4 @@
-package dev.airspyscanner;
+package com.fairhouse.dmps;
 
 import android.app.Activity;
 import android.app.PendingIntent;
@@ -22,7 +22,7 @@ public final class AirspyUsb {
     public static final int PERMISSION_REQUESTED = -2;
     public static final int OPEN_FAILED = -3;
 
-    private static final String ACTION_PERMISSION = "dev.airspyscanner.USB_PERMISSION";
+    private static final String ACTION_PERMISSION = "com.fairhouse.dmps.USB_PERMISSION";
 
     /** Kept so the file descriptor stays valid while Rust is using it. */
     private static UsbDeviceConnection connection;

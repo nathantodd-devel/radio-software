@@ -1,4 +1,4 @@
-Airspy Scanner for macOS (Apple silicon)
+Digital Mobile Police Scanner (DMPS) for macOS (Apple silicon)
 
   scanner-ui   the desktop app
   scanner      the command-line scanner; run `./scanner --help`
@@ -19,6 +19,6 @@ download flag first:
 
 Plug the receiver in and run ./scanner-ui.
 
-Channels are kept in ~/Library/Application Support/airspy-scanner/channels.db.
-For a portable install, create a folder called airspy-scanner beside the
+Channels are kept in ~/Library/Application Support/dmps/channels.db.
+For a portable install, create a folder called dmps beside the
 programs: if it exists, the channels are kept there instead.

@@ -320,7 +320,7 @@ impl ScannerApp {
             .bg(rgb(PANEL))
             .border_b_1()
             .border_color(rgb(BORDER))
-            .child(div().text_xs().text_color(rgb(MUTED)).child("AIRSPY SCANNER"))
+            .child(div().text_xs().text_color(rgb(MUTED)).child("DMPS"))
             .child(
                 div()
                     .text_2xl()

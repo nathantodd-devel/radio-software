@@ -5,7 +5,7 @@
 use gpui_mobile::android::jni as glue;
 use jni::objects::JValue;
 
-const HELPER_CLASS: &str = "dev.airspyscanner.AirspyUsb";
+const HELPER_CLASS: &str = "com.fairhouse.dmps.AirspyUsb";
 // Result codes of AirspyUsb.open, besides a file descriptor.
 const NO_DEVICE: i32 = -1;
 const PERMISSION_REQUESTED: i32 = -2;

@@ -17,5 +17,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "AirspyScanner"
+rootProject.name = "DMPS"
 include(":app")

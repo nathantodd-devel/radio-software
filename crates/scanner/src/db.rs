@@ -62,7 +62,10 @@ const MIGRATIONS: &[&str] = &[
     "ALTER TABLE channels ADD COLUMN record INTEGER NOT NULL DEFAULT 0;",
 ];
 
-const DATA_DIR: &str = "airspy-scanner";
+const DATA_DIR: &str = "dmps";
+/// What the data directory was called before the program was renamed.
+/// One that is there is still used, unless there is a new one too.
+const OLD_DATA_DIR: &str = "airspy-scanner";
 const DB_FILE: &str = "channels.db";
 
 /// A group of channels that are scanned together: an agency's conventional
@@ -103,14 +106,19 @@ fn sql<T>(result: rusqlite::Result<T>) -> Result<T, String> {
 }
 
 impl Db {
-    /// Where the database lives unless told otherwise: in an
-    /// `airspy-scanner` directory beside the program if there is one (a
-    /// portable install), otherwise in the platform's per-user application
-    /// data directory.
+    /// Where the database lives unless told otherwise: in a `dmps`
+    /// directory beside the program if there is one (a portable install),
+    /// otherwise in the platform's per-user application data directory.
+    /// In either place, a directory under the program's old name is used
+    /// if it is the only one there, so that nothing is lost by upgrading.
     pub fn default_path() -> PathBuf {
-        let beside_program = std::env::current_exe()
-            .ok()
-            .and_then(|exe| Some(exe.parent()?.join(DATA_DIR)));
+        // The directory to use under `parent`: the new name, or the old one
+        // if only that exists.
+        let named = |parent: &Path| {
+            let (new, old) = (parent.join(DATA_DIR), parent.join(OLD_DATA_DIR));
+            if !new.is_dir() && old.is_dir() { old } else { new }
+        };
+        let beside_program = std::env::current_exe().ok().and_then(|exe| Some(named(exe.parent()?)));
         if let Some(dir) = beside_program.filter(|dir| dir.is_dir()) {
             return dir.join(DB_FILE);
         }
@@ -123,7 +131,7 @@ impl Db {
         } else {
             var("XDG_DATA_HOME").unwrap_or_else(|| home().join(".local/share"))
         };
-        data.join(DATA_DIR).join(DB_FILE)
+        named(&data).join(DB_FILE)
     }
 
     /// Open the database at `path`, creating it with the starter systems if

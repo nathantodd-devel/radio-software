@@ -149,7 +149,7 @@ impl Hub {
         if self.settings.save_recordings {
             self.kept_recordings.clone()
         } else {
-            std::env::temp_dir().join(format!("airspy-scanner-replay-{}", std::process::id()))
+            std::env::temp_dir().join(format!("dmps-replay-{}", std::process::id()))
         }
     }
 

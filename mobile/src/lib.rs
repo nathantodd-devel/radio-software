@@ -1,4 +1,4 @@
-//! Airspy Scanner for Android.
+//! Digital Mobile Police Scanner (DMPS) for Android.
 //!
 //! The `android-activity` crate calls [`android_main`] on a thread of its
 //! own once the activity has loaded this library. Build with
@@ -22,7 +22,7 @@ fn android_main(app: android_activity::AndroidApp) {
     android_logger::init_once(
         android_logger::Config::default()
             .with_max_level(log::LevelFilter::Info)
-            .with_tag("airspy-scanner"),
+            .with_tag("dmps"),
     );
     // Without this a panic kills the app with nothing in logcat.
     jni::install_panic_hook();

@@ -1,4 +1,4 @@
-Airspy Scanner for Windows (64-bit)
+Digital Mobile Police Scanner (DMPS) for Windows (64-bit)
 
   scanner-ui.exe   the desktop app
   scanner.exe      the command-line scanner; run `scanner --help` in a terminal
@@ -18,8 +18,8 @@ Interface (Interface 0)" and install WinUSB.
 
 Plug the receiver in and run scanner-ui.exe.
 
-Channels are kept in %APPDATA%\airspy-scanner\channels.db.
-For a portable install, create a folder called airspy-scanner beside the
+Channels are kept in %APPDATA%\dmps\channels.db.
+For a portable install, create a folder called dmps beside the
 programs: if it exists, the channels are kept there instead.
 
 Bundled libraries:

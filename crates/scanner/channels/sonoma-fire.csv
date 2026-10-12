@@ -1,0 +1,50 @@
+# Sonoma County fire and EMS (REDCOM), and Rohnert Park public safety:
+# VHF analog narrow FM.
+# Source: RadioReference county database (ctid 231), read 2026-10-09.
+# freq_mhz, ctcss_hz, width (w = 5 kHz deviation, n = 2.5 kHz), tag, description
+# Earlier lines win when several channels are active at once.
+#
+# Ambulances are dispatched on REDCOM. Left out: Timber Cove Fire, which
+# uses a digital squelch code, and the hospital channels.
+
+# Dispatch
+154.3100, 146.2, n, REDCOM,            Fire and EMS Dispatch (all zones)
+155.2650, 123.0, n, Control 2,         North County (zones 4, 5, 6, 8)
+154.1450, 146.2, n, Control 3,         Santa Rosa Area (zone 7)
+154.1750, 156.7, n, Control 4,         South County (zones 3, 9)
+154.0250, 107.2, n, Control 9,         Southern Sonoma County
+154.1000, 103.5, n, Rohnert Park PS1,  Rohnert Park Police and Fire Dispatch
+155.1000, 192.8, n, MEDCOM,            Countywide EMS
+158.9400, 186.2, n, Cloverdale Amb,    Cloverdale Ambulance
+
+# Command and tactical
+154.1525, 103.5, n, Coast Blue,        Zone 4 Command
+153.7700, 146.2, n, XSN Tac 1,         Tac 1 (zones 3, 9, 4)
+154.2050, 146.2, n, XSN Tac 2,         Tac 2 (zones 9, 4, 3)
+154.4450, 146.2, n, XSN Tac 3,         Tac 3 (zones 5, 8)
+154.2500, 146.2, n, XSN Tac 5,         Tac 5 (zone 7)
+154.0100, 146.2, n, XSN Tac 7,         Tac 7 (zone 6)
+154.9950, 146.2, n, XSN Tac 8,         Tac 8 (zone 6)
+154.0700, 146.2, n, XSN Tac 9,         Tac 9 (zone 7)
+154.4300, 146.2, n, XSN Tac 11,        Tac 11 (spare)
+153.9950, 192.8, n, XSN Tac 12,        Tac 12 (LRA Fire Air/Ground)
+154.3850, 146.2, n, XSN Tac 13,        Tac 13 (spare)
+155.8950, 131.8, n, XSN Tac 14,        Tac 14 (zones 8, 5); Sebastopol Fire
+153.7925, 156.7, n, XSN NSC Tac,       North Sonoma Coast FPD Tac
+151.1000, 103.5, n, Rohnert Park PS2,  Rohnert Park Police Tac
+
+# Interoperability
+153.9650, 156.7, n, XSN Victor 1,      Victor 1
+155.0700, 156.7, n, XSN Victor 2,      Victor 2
+155.2950, 156.7, n, XSN Victor 3,      Victor 3
+154.7850, 156.7, n, XSN Victor 4,      Victor 4
+156.1200, 156.7, n, XSN Victor 5,      Victor 5
+155.3775, 156.7, n, XSN Victor 6,      Victor 6 (and its repeater)
+154.4525, 156.7, n, Comm East VHF,     Crossband Interop, Sonoma Mountain
+151.1375, 156.7, n, Comm West VHF,     Crossband Interop, Mt Jackson
+158.7375, 156.7, n, Comm North VHF,    Crossband Interop, Oak Ridge
+154.4000, 156.7, n, Comm Coast VHF,    Crossband Interop, Seaview Ridge
+
+# Search and rescue
+155.1600, 146.2, w, SCSO SAR 1,        Sheriff Search and Rescue Primary
+155.2950, 100.0, w, SCSO SAR 2,        Sheriff Search and Rescue Tactical

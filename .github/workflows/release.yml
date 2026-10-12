@@ -100,7 +100,7 @@ jobs:
 
       - name: Stage files
         run: |
-          name="airspy-scanner-${{ github.ref_type == 'tag' && github.ref_name || github.sha }}-${{ matrix.name }}"
+          name="dmps-${{ github.ref_type == 'tag' && github.ref_name || github.sha }}-${{ matrix.name }}"
           echo "PACKAGE=$name" >> "$GITHUB_ENV"
           mkdir -p "dist/$name"
           ext=""; [ "$RUNNER_OS" = Windows ] && ext=".exe"
@@ -207,7 +207,7 @@ jobs:
       - name: Build the APK
         working-directory: mobile/android/gradle
         run: |
-          name="airspy-scanner-${{ github.ref_type == 'tag' && github.ref_name || github.sha }}-android-arm64"
+          name="dmps-${{ github.ref_type == 'tag' && github.ref_name || github.sha }}-android-arm64"
           version="${{ github.ref_type == 'tag' && github.ref_name || '0.0.0' }}"
           props="-PversionName=${version#v} -PversionCode=${{ github.run_number }}"
           mkdir -p "$GITHUB_WORKSPACE/dist"
@@ -226,7 +226,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: airspy-scanner-android-arm64
+          name: dmps-android-arm64
           path: dist/*.apk
           if-no-files-found: error
 
@@ -241,7 +241,7 @@ jobs:
       # The packages only: the browser client is already inside them.
       - uses: actions/download-artifact@v4
         with:
-          pattern: airspy-scanner-*
+          pattern: dmps-*
           path: dist
           merge-multiple: true
 

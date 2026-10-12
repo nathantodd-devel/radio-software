@@ -58,7 +58,7 @@ page addresses: radioreference.com/db/sid/ID and .../db/browse/ctid/ID.
       --no-audio     don't play audio (useful with --record)
       --dwell SECS   time to listen to a quiet band before hopping (default 1.5)
       --stay SECS    longest turn for a band that stays busy (default 20)
-      --db FILE      channel database (default: airspy-scanner/channels.db beside
+      --db FILE      channel database (default: dmps/channels.db beside
                      this program if that folder exists, otherwise in your
                      user data directory; ~/.local/share on Linux)";
 

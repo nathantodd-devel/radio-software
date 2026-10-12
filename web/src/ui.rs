@@ -203,7 +203,7 @@ impl Client {
                 div()
                     .flex_1()
                     .overflow_hidden()
-                    .child(div().text_xs().text_color(rgb(MUTED)).child("AIRSPY SCANNER"))
+                    .child(div().text_xs().text_color(rgb(MUTED)).child("DMPS"))
                     .child(
                         div()
                             .text_2xl()

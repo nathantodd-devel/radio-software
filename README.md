@@ -1,10 +1,10 @@
-# Airspy Scanner
+# Digital Mobile Police Scanner (DMPS)
 
 [![CI](https://github.com/nathantodd-devel/radio-software/actions/workflows/ci.yml/badge.svg)](https://github.com/nathantodd-devel/radio-software/actions/workflows/ci.yml)
 [![Android](https://github.com/nathantodd-devel/radio-software/actions/workflows/android.yml/badge.svg)](https://github.com/nathantodd-devel/radio-software/actions/workflows/android.yml)
 [![Release](https://github.com/nathantodd-devel/radio-software/actions/workflows/release.yml/badge.svg)](https://github.com/nathantodd-devel/radio-software/actions/workflows/release.yml)
 
-A radio scanner for [Airspy](https://airspy.com) and RTL-SDR software-defined receivers,
+**DMPS**, the Digital Mobile Police Scanner, is a radio scanner for [Airspy](https://airspy.com) and RTL-SDR software-defined receivers,
 written in Rust.
 
 Instead of stepping through channels one at a time like a traditional scanner, it receives a
@@ -258,19 +258,23 @@ Things to know:
 
 ## The channel database
 
-Channels live in a SQLite file, `airspy-scanner/channels.db`, in your user data directory:
+Channels live in a SQLite file, `dmps/channels.db`, in your user data directory:
 
 | Platform | Location |
 |---|---|
-| Linux | `~/.local/share/airspy-scanner/` |
-| Windows | `%APPDATA%\airspy-scanner\` |
-| macOS | `~/Library/Application Support/airspy-scanner/` |
+| Linux | `~/.local/share/dmps/` |
+| Windows | `%APPDATA%\dmps\` |
+| macOS | `~/Library/Application Support/dmps/` |
 
 A new database starts with three systems for San Mateo County, California: Police, Fire and
 the County P25 system.
 
-**Portable mode:** if a folder named `airspy-scanner` exists beside the executable, the
+**Portable mode:** if a folder named `dmps` exists beside the executable, the
 database, themes and kept recordings go there instead. Create the folder yourself to opt in.
+
+The program used to be called Airspy Scanner and kept its data in a folder named
+`airspy-scanner`. If you have one and no `dmps` folder, it is still used, so nothing is lost by
+upgrading; rename it to `dmps` whenever you like.
 
 ## Importing channels
 
@@ -549,7 +553,7 @@ Systems, Inc. Channel data shipped with the project was compiled from RadioRefer
 
 ## License
 
-Airspy Scanner is free software, licensed under the
+Digital Mobile Police Scanner is free software, licensed under the
 [GNU Affero General Public License, version 3](LICENSE).
 
 In short: you may use, study, change and share it, provided that anything you distribute, or

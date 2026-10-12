@@ -1,4 +1,4 @@
-# ProGuard / R8 rules for Airspy Scanner.
+# ProGuard / R8 rules for Digital Mobile Police Scanner.
 #
 # This is a pure native (Rust) application using NativeActivity — there is no
 # Java or Kotlin application code to shrink, optimize, or obfuscate.

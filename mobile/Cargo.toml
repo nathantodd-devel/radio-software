@@ -4,11 +4,11 @@
 # app's GPUI release.
 
 [package]
-name = "airspy-scanner-mobile"
-version = "0.3.0"
+name = "dmps-mobile"
+version = "1.0.0"
 edition = "2024"
 license = "AGPL-3.0-only"
-description = "Airspy Scanner for Android"
+description = "Digital Mobile Police Scanner (DMPS) for Android"
 publish = false
 
 [workspace]
@@ -16,7 +16,7 @@ publish = false
 [lib]
 # The library the Android activity loads; the name is repeated as
 # `nativeLibraryName` in android/gradle/app/build.gradle.kts.
-name = "airspy_scanner_mobile"
+name = "dmps_mobile"
 crate-type = ["cdylib"]
 
 [dependencies]

@@ -251,7 +251,7 @@ const LOGIN_PAGE: &str = r#"<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Airspy Scanner</title>
+<title>Digital Mobile Police Scanner</title>
 <style>
 body { margin: 0; padding: 32px 16px; background: #121318; color: #e6e9ee; font: 16px/1.5 system-ui, sans-serif; }
 form { max-width: 360px; margin: 0 auto; padding: 24px; border: 1px solid #313743; border-radius: 8px; background: #1c2027; }
@@ -265,7 +265,7 @@ p { min-height: 1.5em; margin: 12px 0 0; color: #e5645c; font-size: 14px; }
 </head>
 <body>
 <form method="post" action="/login">
-<h1>Airspy Scanner</h1>
+<h1>Digital Mobile Police Scanner</h1>
 <label for="code">Access code</label>
 <input id="code" name="code" type="password" autocomplete="current-password" autofocus required>
 <button>Open</button>

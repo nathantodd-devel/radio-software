@@ -1,4 +1,4 @@
-Airspy Scanner for Linux (x86_64)
+Digital Mobile Police Scanner (DMPS) for Linux (x86_64)
 
   scanner-ui   the desktop app (Wayland or X11)
   scanner      the command-line scanner; run `./scanner --help`
@@ -20,6 +20,6 @@ be holding it: blacklist dvb_usb_rtl28xxu and plug it in again.
 
 Plug the receiver in and run ./scanner-ui.
 
-Channels are kept in ~/.local/share/airspy-scanner/channels.db.
-For a portable install, create a folder called airspy-scanner beside the
+Channels are kept in ~/.local/share/dmps/channels.db.
+For a portable install, create a folder called dmps beside the
 programs: if it exists, the channels are kept there instead.

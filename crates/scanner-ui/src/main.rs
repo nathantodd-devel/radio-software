@@ -25,7 +25,7 @@ use theme::theme;
 const METER_FULL_DB: f32 = 40.0;
 const REFRESH: Duration = Duration::from_millis(100);
 
-const TITLE: &str = "Airspy Scanner";
+const TITLE: &str = "Digital Mobile Police Scanner";
 const DEFAULT_SIZE: (f32, f32) = (1460., 760.);
 const MIN_SIZE: (f32, f32) = (640., 320.);
 const SIDEBAR_WIDTH: f32 = 220.;
@@ -73,7 +73,7 @@ fn kept_recordings_dir() -> PathBuf {
 
 /// Where recordings go when they are only kept for replaying this session.
 fn replay_dir() -> PathBuf {
-    std::env::temp_dir().join(format!("airspy-scanner-replay-{}", std::process::id()))
+    std::env::temp_dir().join(format!("dmps-replay-{}", std::process::id()))
 }
 
 struct ScannerView {
@@ -1650,7 +1650,7 @@ fn main() {
                 // GNOME; draw our own wherever the compositor leaves it to us.
                 window_decorations: Some(WindowDecorations::Client),
                 window_min_size: Some(size(px(MIN_SIZE.0), px(MIN_SIZE.1))),
-                app_id: Some("airspy-scanner".into()),
+                app_id: Some("com.fairhouse.dmps".into()),
                 ..Default::default()
             },
             |_, cx| cx.new(ScannerView::new),

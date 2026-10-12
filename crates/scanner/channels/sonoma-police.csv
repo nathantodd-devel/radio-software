@@ -1,0 +1,51 @@
+# Sonoma County law enforcement, UHF analog narrow FM.
+# Source: RadioReference county database (ctid 231), read 2026-10-09.
+# freq_mhz, ctcss_hz, width (w = 5 kHz deviation, n = 2.5 kHz), tag, description
+# Earlier lines win when several channels are active at once.
+#
+# Rohnert Park's police are on VHF: see sonoma-fire.csv. The City of Sonoma
+# and Windsor are policed by the Sheriff.
+# Left out: encrypted P25 channels (Sheriff 2 Records, Santa Rosa PD5),
+# channels using digital squelch codes (juvenile hall, most of Santa Rosa
+# Junior College), and channels listed without a tone (SWAT, investigations).
+
+# Dispatch
+453.7250, 131.8, n, SCSO 1 Dispatch,   Sheriff Dispatch
+460.3750, 127.3, n, Santa Rosa PD1,    Santa Rosa Police Dispatch
+460.0750, 107.2, n, Petaluma PD1,      Petaluma Police Dispatch
+460.1500, 136.5, n, Healdsburg PD1,    Healdsburg Police Dispatch
+460.1250, 82.5,  n, Sebastopol PD,     Sebastopol Police Dispatch
+460.2250, 103.5, n, Cotati PD,         Cotati Police Dispatch (patched with Sonoma State)
+453.1250, 186.2, n, Cloverdale PD1,    Cloverdale Police Dispatch
+453.9000, 162.2, n, SSU PD,            Sonoma State University Police Dispatch
+453.2250, 186.2, n, SRJC PD,           Santa Rosa Junior College Police Dispatch
+453.4000, 103.5, n, SCSO 3 River/Val,  Sheriff River and Valley Dispatch (part-time)
+
+# Secondary and tactical
+460.0500, 127.3, n, Santa Rosa PD2,    Santa Rosa Police Records
+460.2000, 127.3, n, Santa Rosa PD4,    Santa Rosa Police Tactical
+460.0250, 127.3, n, Santa Rosa PD3,    Santa Rosa Police Special Event (CALAW4)
+460.3500, 107.2, n, Petaluma PD3,      Petaluma Police Records
+460.5250, 107.2, n, Petaluma PD4,      Petaluma Police Tactical and Car-to-Car
+453.7750, 123.0, n, Healdsburg PD2,    Healdsburg Police Secondary
+453.7500, 186.2, n, Cloverdale PD2,    Cloverdale Police Tactical
+453.5500, 127.3, n, SCSO 4 Tactical,   Sheriff Tactical
+453.4750, 192.8, n, SCSO 5 Tactical,   Sheriff Tactical
+460.2375, 127.3, n, SCSO 8 Tactical,   Sheriff Tactical
+453.0250, 127.3, n, SCSO 6 TComm,      Sheriff Telecommunications Bureau
+460.4250, 156.7, n, SCSO 7 Courts,     Sheriff Court Security
+460.2750, 127.3, n, SCSO 9 Events,     Sheriff Sonoma Raceway Events
+460.3000, 192.8, n, SCSO 10 Lake,      Sheriff Lake Sonoma Interop
+453.1750, 192.8, n, Countywide 2,      UHF Interagency Communications
+
+# Detention
+460.1750, 192.8, n, SCSO MADF 1,       Main Adult Detention Facility 1
+460.4750, 127.3, n, SCSO MADF 2,       Main Adult Detention Facility 2
+460.4250, 103.5, n, SCSO NCDF,         North County Detention Facility
+
+# Regional Parks rangers
+453.5875, 82.5,  n, Parks Countywide,  Regional Parks Countywide Operations
+453.0375, 136.5, n, Parks SpringLake,  Spring Lake Regional Park
+453.1125, 136.5, n, Parks HVMB,        Healdsburg Veterans Memorial Beach
+453.8875, 136.5, n, Parks Doran,       Doran Regional Park
+453.9375, 136.5, n, Parks River,       Russian River Area
