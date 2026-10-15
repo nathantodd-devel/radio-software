@@ -5,7 +5,7 @@ Digital Mobile Police Scanner (DMPS) for Windows (64-bit)
   scanner-web.exe  the scanner as a web page; run it and open
                    http://localhost:1515/ (see `scanner-web --help`)
 
-Works with an Airspy R2 or Mini, or an RTL-SDR dongle (RTL2832U with an
+Works with an Airspy R2 or Mini, a HackRF, or an RTL-SDR dongle (RTL2832U with an
 R820T2 or R860 tuner, among others).
 
 Keep all the files in this folder together: the programs load the DLLs
@@ -15,6 +15,9 @@ set up its USB driver by themselves when you plug it in.
 An RTL-SDR needs the WinUSB driver put on it once, with Zadig
 (https://zadig.akeo.ie): plug the dongle in, run Zadig, choose "Bulk-In,
 Interface (Interface 0)" and install WinUSB.
+
+A HackRF needs nothing installed: its library is built into the programs,
+and Windows sets up its USB driver by itself.
 
 Plug the receiver in and run scanner-ui.exe.
 
@@ -38,3 +41,9 @@ Bundled libraries:
       https://github.com/rtlsdrblog/rtl-sdr-blog (GPL 2.0 or later)
   vcruntime140.dll
       the Microsoft Visual C++ runtime, which rtlsdr.dll needs
+
+Built into the programs:
+  libhackrf 2026.01.3, https://github.com/greatscottgadgets/hackrf
+      Copyright (c) 2012-2022 Great Scott Gadgets and others; BSD 3-clause.
+      Its licence is in host/libhackrf/src/hackrf.c there.
+  libusb, https://libusb.info (LGPL 2.1)

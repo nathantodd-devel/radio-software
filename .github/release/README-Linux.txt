@@ -5,13 +5,14 @@ Digital Mobile Police Scanner (DMPS) for Linux (x86_64)
   scanner-web  the scanner as a web page; run it and open
                http://localhost:1515/ (see `./scanner-web --help`)
 
-Works with an Airspy R2 or Mini, or an RTL-SDR dongle (RTL2832U with an
+Works with an Airspy R2 or Mini, a HackRF, or an RTL-SDR dongle (RTL2832U with an
 R820T2 or R860 tuner, among others). You need, from your distribution, the
 library for whichever you have, and aplay for audio:
 
   libairspy    Fedora: sudo dnf install airspyone_host
                Debian/Ubuntu: sudo apt install libairspy0
   librtlsdr    Fedora and Debian/Ubuntu: the rtl-sdr package
+  libhackrf    Fedora: the hackrf package; Debian/Ubuntu: libhackrf0
   aplay        Fedora and Debian/Ubuntu: the alsa-utils package
 
 Those packages also install the udev rules that let you use the receiver

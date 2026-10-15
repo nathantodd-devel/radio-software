@@ -80,6 +80,8 @@ pub struct ScannerApp {
     expanded: Option<usize>,
     active_only: bool,
     volume: f32,
+    /// Bring every channel to the same loudness.
+    normalize: bool,
     squelch_db: f32,
     gain: u8,
     scan: ScanMode,
@@ -117,6 +119,7 @@ impl ScannerApp {
             expanded: None,
             active_only: false,
             volume: saved(db.as_ref(), "volume", 3.0),
+            normalize: saved(db.as_ref(), "normalize", true),
             squelch_db: saved(db.as_ref(), "squelch_db", 6.0),
             gain: saved(db.as_ref(), "gain", defaults.gain),
             scan: SCAN_MODES
@@ -247,13 +250,9 @@ impl ScannerApp {
                 };
                 self.status.clear();
                 let history = std::mem::take(&mut self.history);
-                self.session = Some(Session::start_after(
-                    plan,
-                    config,
-                    self.volume,
-                    self.squelch_db,
-                    history,
-                ));
+                let session = Session::start_after(plan, config, self.volume, self.squelch_db, history);
+                session.controls.set_normalize(self.normalize);
+                self.session = Some(session);
             }
             Err(e) => self.status = e,
         }
@@ -287,6 +286,14 @@ impl ScannerApp {
         self.save("volume", self.volume);
         if let Some(s) = &self.session {
             s.controls.set_volume(self.volume);
+        }
+    }
+
+    fn set_normalize(&mut self, normalize: bool) {
+        self.normalize = normalize;
+        self.save("normalize", normalize);
+        if let Some(s) = &self.session {
+            s.controls.set_normalize(normalize);
         }
     }
 
@@ -753,6 +760,7 @@ impl ScannerApp {
         let (volume, squelch_db, gain, scan) = (self.volume, self.squelch_db, self.gain, self.scan);
         let rate = self.rate();
         let muted = self.session.as_ref().is_some_and(|s| s.controls.muted());
+        let normalize = self.normalize;
         // One setting: its name and the control for it.
         let row = |name: &'static str, control: Div| {
             div()
@@ -794,6 +802,17 @@ impl ScannerApp {
                             cx.notify();
                         },
                     )),
+                ),
+            ))
+            .child(row(
+                "Normalize volume",
+                div().child(
+                    button("normalize", if normalize { "On" } else { "Off" }, normalize, HOLD).on_click(
+                        cx.listener(move |this, _, _, cx| {
+                            this.set_normalize(!normalize);
+                            cx.notify();
+                        }),
+                    ),
                 ),
             ))
             .child(row(

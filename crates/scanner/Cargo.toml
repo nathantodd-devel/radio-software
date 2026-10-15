@@ -7,6 +7,7 @@ license = "AGPL-3.0-only"
 [dependencies]
 airspy = { path = "../drivers/airspy" , version = "1.0.1" }
 rtlsdr = { path = "../drivers/rtlsdr", version = "1.0.1" }
+hackrf = { path = "../drivers/hackrf", version = "1.0.1" }
 receiver = { path = "../drivers/receiver", version = "1.0.1" }
 audio = { path = "../drivers/audio" , version = "1.0.1" }
 radiocore = { path = "../radiocore" , version = "1.0.1" }
@@ -19,3 +20,7 @@ roxmltree = "0.21.1"
 serde_json = "1"
 sha2 = "0.10"
 pgp = { version = "0.21.0", default-features = false }
+
+[features]
+# See radiocore's Cargo.toml.
+fftw = ["radiocore/fftw"]

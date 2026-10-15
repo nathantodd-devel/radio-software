@@ -5,6 +5,10 @@ edition = "2024"
 license = "AGPL-3.0-only"
 description = "The scanner as a web server: scan here, listen and control from a browser"
 
+[features]
+# Do the FFTs with FFTW when it is installed (see radiocore's Cargo.toml).
+fftw = ["scanner/fftw"]
+
 [dependencies]
 scanner = { path = "../scanner", version = "1.0.1" }
 scanner-proto = { path = "../scanner-proto", version = "1.0.1" }

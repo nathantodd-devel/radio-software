@@ -11,6 +11,8 @@ pub const AUTO_DEVICE: &str = "auto";
 
 pub struct Settings {
     pub volume: f32,
+    /// Bring every channel to the same loudness.
+    pub normalize: bool,
     pub squelch_db: f32,
     /// Which kind of receiver to use: a driver's id, or [`AUTO_DEVICE`].
     pub device: String,
@@ -32,6 +34,13 @@ pub struct Settings {
     pub save_recordings: bool,
     /// Name of the desktop app's colour theme.
     pub theme: String,
+    /// Show the spectrum each receiver picks up.
+    pub show_spectrum: bool,
+    /// Sizes of the desktop app's panels, in pixels: the systems list and
+    /// activity log across, and each receiver's spectrum down.
+    pub sidebar_width: f32,
+    pub activity_width: f32,
+    pub spectrum_height: f32,
     /// The systems being scanned together, in the order they were picked.
     pub selected: Vec<i64>,
 }
@@ -56,6 +65,7 @@ impl Settings {
         let defaults = Config::default();
         Self {
             volume: get(db, "volume", 3.0),
+            normalize: get(db, "normalize", true),
             squelch_db: get(db, "squelch_db", 6.0),
             device: get(db, "device", AUTO_DEVICE.to_string()),
             gain: get(db, "gain", defaults.gain),
@@ -67,6 +77,10 @@ impl Settings {
             max_stay_secs: get(db, "max_stay_secs", defaults.max_stay_secs),
             save_recordings: get(db, "save_recordings", false),
             theme: get(db, "theme", "Default".to_string()),
+            show_spectrum: get(db, "show_spectrum", true),
+            sidebar_width: get(db, "sidebar_width", 220.0),
+            activity_width: get(db, "activity_width", 380.0),
+            spectrum_height: get(db, "spectrum_height", 170.0),
             selected: get(db, "selected", String::new())
                 .split(',')
                 .filter_map(|id| id.parse().ok())
@@ -78,6 +92,7 @@ impl Settings {
         let selected: Vec<String> = self.selected.iter().map(i64::to_string).collect();
         let values = [
             ("volume", self.volume.to_string()),
+            ("normalize", self.normalize.to_string()),
             ("squelch_db", self.squelch_db.to_string()),
             ("device", self.device.clone()),
             ("gain", self.gain.to_string()),
@@ -89,6 +104,10 @@ impl Settings {
             ("max_stay_secs", self.max_stay_secs.to_string()),
             ("save_recordings", self.save_recordings.to_string()),
             ("theme", self.theme.clone()),
+            ("show_spectrum", self.show_spectrum.to_string()),
+            ("sidebar_width", self.sidebar_width.to_string()),
+            ("activity_width", self.activity_width.to_string()),
+            ("spectrum_height", self.spectrum_height.to_string()),
             ("selected", selected.join(",")),
         ];
         for (key, value) in values {

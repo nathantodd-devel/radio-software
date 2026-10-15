@@ -4,6 +4,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod editor;
+mod spectrum;
 mod theme;
 
 use std::path::{Path, PathBuf};
@@ -11,8 +12,8 @@ use std::time::Duration;
 
 use gpui::{
     App, Application, Bounds, Context, CursorStyle, Decorations, Div, FocusHandle, FontWeight, KeyDownEvent,
-    MouseButton, PathPromptOptions, Pixels, ResizeEdge, Rgba, SharedString, Stateful, TitlebarOptions, Window,
-    WindowBounds, WindowDecorations, WindowOptions, div, prelude::*, px, relative, rgb, size,
+    MouseButton, MouseDownEvent, MouseMoveEvent, PathPromptOptions, Pixels, ResizeEdge, Rgba, SharedString, Stateful,
+    TitlebarOptions, Window, WindowBounds, WindowDecorations, WindowOptions, div, prelude::*, px, relative, rgb, size,
 };
 use scanner::db::{Db, System};
 use scanner::engine::{self, Config, Radio, ScanMode};
@@ -28,10 +29,14 @@ const REFRESH: Duration = Duration::from_millis(100);
 const TITLE: &str = "Digital Mobile Police Scanner";
 const DEFAULT_SIZE: (f32, f32) = (1460., 760.);
 const MIN_SIZE: (f32, f32) = (640., 320.);
-const SIDEBAR_WIDTH: f32 = 220.;
 const THEME_LIST_WIDTH: f32 = 220.;
 const THEME_LIST_HEIGHT: f32 = 180.;
-const ACTIVITY_WIDTH: f32 = 380.;
+/// How small and large the panels can be dragged to, in pixels.
+const SIDEBAR_WIDTHS: (f32, f32) = (150., 520.);
+const ACTIVITY_WIDTHS: (f32, f32) = (240., 760.);
+const SPECTRUM_HEIGHTS: (f32, f32) = (60., 600.);
+/// Thickness of the strips between panels that resize them.
+const DIVIDER: f32 = 5.;
 /// Share of the display a new window may take up.
 const MAX_DISPLAY_SHARE: f32 = 0.85;
 /// Below these window widths the activity log, then the channel
@@ -108,6 +113,24 @@ struct ScannerView {
     /// What the channel list and activity log are narrowed down to.
     filter: Filter,
     filter_focus: FocusHandle,
+    /// The divider being dragged, if one is.
+    drag: Option<Drag>,
+}
+
+/// A strip between panels that is dragged to resize them.
+#[derive(Clone, Copy, PartialEq)]
+enum Divider {
+    Sidebar,
+    Activity,
+    Spectrum,
+}
+
+/// A divider being dragged: where the mouse started on the axis it moves
+/// along, and the size the panel was then.
+struct Drag {
+    divider: Divider,
+    from: f32,
+    size: f32,
 }
 
 /// Which channels and calls to show.
@@ -166,6 +189,7 @@ impl ScannerView {
             editor_focus: cx.focus_handle(),
             filter: Filter::default(),
             filter_focus: cx.focus_handle(),
+            drag: None,
         };
         match Db::open(&Db::default_path()) {
             Ok(db) => view.db = Some(db),
@@ -271,7 +295,9 @@ impl ScannerView {
                 };
                 let (volume, squelch_db) = (self.settings.volume, self.settings.squelch_db);
                 let history = std::mem::take(&mut self.history);
-                self.session = Some(Session::start_after(plan, config, volume, squelch_db, history));
+                let session = Session::start_after(plan, config, volume, squelch_db, history);
+                session.controls.set_normalize(self.settings.normalize);
+                self.session = Some(session);
             }
             Err(e) => self.error = Some(e),
         }
@@ -340,6 +366,82 @@ impl ScannerView {
         }
         if restart {
             self.start();
+        }
+    }
+
+    /// A strip that resizes the panel beside it when dragged.
+    fn divider(&self, which: Divider, cx: &mut Context<Self>) -> Div {
+        let strip = if which == Divider::Spectrum {
+            div()
+                .flex_none()
+                .h(px(DIVIDER))
+                .w_full()
+                .cursor(CursorStyle::ResizeUpDown)
+        } else {
+            div()
+                .flex_none()
+                .w(px(DIVIDER))
+                .h_full()
+                .cursor(CursorStyle::ResizeLeftRight)
+        };
+        let dragging = self.drag.as_ref().is_some_and(|d| d.divider == which);
+        strip
+            .when(dragging, |strip| strip.bg(rgb(theme().accent)))
+            .when(!dragging, |strip| strip.hover(|strip| strip.bg(rgb(theme().border))))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    let s = &this.settings;
+                    let (from, size) = match which {
+                        Divider::Sidebar => (event.position.x, s.sidebar_width),
+                        Divider::Activity => (event.position.x, s.activity_width),
+                        Divider::Spectrum => (event.position.y, s.spectrum_height),
+                    };
+                    this.drag = Some(Drag {
+                        divider: which,
+                        from: f32::from(from),
+                        size,
+                    });
+                    cx.stop_propagation();
+                    cx.notify();
+                }),
+            )
+    }
+
+    /// Follow the mouse while a divider is dragged.
+    fn drag_to(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+        let Some(drag) = &self.drag else { return };
+        if event.pressed_button != Some(MouseButton::Left) {
+            // Let go where the release wasn't seen.
+            return self.end_drag(cx);
+        }
+        // With several receivers the drag is shared between their spectra.
+        let receivers = self
+            .session
+            .as_ref()
+            .map_or(1, |session| session.live.lock().unwrap().receivers.len().max(1));
+        let clamp = |size: f32, (lo, hi): (f32, f32)| size.clamp(lo, hi).round();
+        let s = &mut self.settings;
+        match drag.divider {
+            Divider::Sidebar => {
+                s.sidebar_width = clamp(drag.size + f32::from(event.position.x) - drag.from, SIDEBAR_WIDTHS);
+            }
+            Divider::Activity => {
+                s.activity_width = clamp(drag.size - (f32::from(event.position.x) - drag.from), ACTIVITY_WIDTHS);
+            }
+            Divider::Spectrum => {
+                let moved = (f32::from(event.position.y) - drag.from) / receivers as f32;
+                s.spectrum_height = clamp(drag.size + moved, SPECTRUM_HEIGHTS);
+            }
+        }
+        cx.notify();
+    }
+
+    /// Done dragging: the new size is saved for next time.
+    fn end_drag(&mut self, cx: &mut Context<Self>) {
+        if self.drag.take().is_some() {
+            self.update_settings(false, |_| {});
+            cx.notify();
         }
     }
 
@@ -476,7 +578,7 @@ impl ScannerView {
         let mut list = div()
             .id("systems")
             .flex_none()
-            .w(px(SIDEBAR_WIDTH))
+            .w(px(self.settings.sidebar_width))
             .h_full()
             .overflow_y_scroll()
             .border_r_1()
@@ -929,7 +1031,7 @@ impl ScannerView {
         div()
             .id("activity")
             .flex_none()
-            .w(px(ACTIVITY_WIDTH))
+            .w(px(self.settings.activity_width))
             .h_full()
             .overflow_y_scroll()
             .border_l_1()
@@ -1186,6 +1288,7 @@ impl ScannerView {
     fn settings_page(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let s = &self.settings;
         let (gain, scan, dwell, stay, save) = (s.gain, s.scan, s.dwell_secs, s.max_stay_secs, s.save_recordings);
+        let (spectrum, normalize) = (s.show_spectrum, s.normalize);
         let (device, ppm, bias_tee) = (s.device.clone(), s.ppm, s.bias_tee);
         let rate = self.rate();
         // One setting: its name, what it does, and the control for it.
@@ -1410,6 +1513,33 @@ impl ScannerView {
                     .into_any_element(),
             ))
             .child(row(
+                "Normalize volume",
+                "Bring every channel to the same loudness, whether the transmitter is quiet or loud, analog \
+                 or P25, so the volume control alone sets how loud it plays."
+                    .to_string(),
+                toggle("normalize", normalize)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.update_settings(false, |s| s.normalize = !normalize);
+                        if let Some(s) = &this.session {
+                            s.controls.set_normalize(!normalize);
+                        }
+                        cx.notify();
+                    }))
+                    .into_any_element(),
+            ))
+            .child(row(
+                "Spectrum",
+                "Show what each receiver picks up across its band, with a line at every channel: brighter \
+                 while it is active, in the accent colour while it is playing. Drag its bottom edge to resize it."
+                    .to_string(),
+                toggle("show-spectrum", spectrum)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.update_settings(false, |s| s.show_spectrum = !spectrum);
+                        cx.notify();
+                    }))
+                    .into_any_element(),
+            ))
+            .child(row(
                 "Theme",
                 format!(
                     "Colours for the app. Add your own as .json files in {}.",
@@ -1455,7 +1585,14 @@ impl Render for ScannerView {
                 let live = session.live.lock().unwrap();
                 let total = session.plan.entries.len();
                 let shown: Vec<usize> = (0..total).filter(|&c| self.shows_channel(c, session, &live)).collect();
+                let spectra = match self.settings.show_spectrum {
+                    true => spectrum::panels(session, &live, self.settings.spectrum_height),
+                    false => Vec::new(),
+                };
+                let has_spectra = !spectra.is_empty();
                 main.child(self.now_playing(session, &live))
+                    .children(spectra)
+                    .when(has_spectra, |main| main.child(self.divider(Divider::Spectrum, cx)))
                     .when_some(self.error.clone(), |main, error| {
                         main.child(
                             div()
@@ -1504,7 +1641,8 @@ impl Render for ScannerView {
                                     .children(shown.iter().map(|&c| self.channel_row(c, roomy, session, &live, cx))),
                             )
                             .when(width >= px(ACTIVITY_MIN_WIDTH), |body| {
-                                body.child(self.activity(session, &live, cx))
+                                body.child(self.divider(Divider::Activity, cx))
+                                    .child(self.activity(session, &live, cx))
                             }),
                     )
             }
@@ -1523,9 +1661,13 @@ impl Render for ScannerView {
                     .flex()
                     .overflow_hidden()
                     .child(self.sidebar(cx))
+                    .child(self.divider(Divider::Sidebar, cx))
                     .child(main),
             )
             .children(resize_handles(window))
+            // A divider keeps following the mouse once it leaves the strip.
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| this.drag_to(event, cx)))
+            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| this.end_drag(cx)))
     }
 }
 
@@ -1634,6 +1776,7 @@ fn main() {
     match std::env::args().nth(1).as_deref() {
         Some("-v" | "--version") => {
             println!("scanner-ui {} ({TITLE})", scanner::update::VERSION);
+            println!("FFTs by {}", scanner::fft_backend());
             return;
         }
         // What the installer's updater task runs: this program rather than

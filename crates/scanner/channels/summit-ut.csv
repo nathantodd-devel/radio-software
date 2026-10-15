@@ -1,0 +1,14 @@
+# Summit County, Utah (Park City): VHF/UHF conventional.
+# Source: RadioReference county database (ctid 2798), read 2026-10-14.
+# freq_mhz, ctcss_hz, width (w = 5 kHz deviation, n = 2.5 kHz), tag, description
+# freq_mhz, nac, p25, tag, description   a P25 conventional channel
+# Earlier lines win when several channels are active at once.
+#
+# Most traffic is on the Utah Communications Authority P25 trunked system,
+# which isn't here; the dispatch channels below are linked to it.
+# Left out: the DMR school bus channels and Jordanelle Water's data channel.
+
+155.6100, 151.4, n, Summit Law,        Sheriff/UHP/Park City Police (linked to UCA 5513)
+155.0850, 203.5, n, Summit FD Link,    Fire/EMS (linked to UCA 5520)
+155.2950, 300,   p25, Summit SAR,      Search and Rescue
+460.4625, 156.7, n, Summit Jail,       Jail

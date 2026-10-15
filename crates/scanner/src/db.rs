@@ -24,6 +24,27 @@ const STARTER_SYSTEMS: &[(&str, &str, &str)] = &[
         "San Mateo County, CA",
         include_str!("../channels/san-mateo-p25.csv"),
     ),
+    // The four counties with the highest per capita income (BEA, 2024).
+    (
+        "Public Safety",
+        "Teton County, WY",
+        include_str!("../channels/teton-wy.csv"),
+    ),
+    (
+        "Public Safety",
+        "Summit County, UT",
+        include_str!("../channels/summit-ut.csv"),
+    ),
+    (
+        "Public Safety",
+        "Pitkin County, CO",
+        include_str!("../channels/pitkin-co.csv"),
+    ),
+    (
+        "Public Safety",
+        "Loving County, TX",
+        include_str!("../channels/loving-tx.csv"),
+    ),
 ];
 
 /// Each step brings a database up one version; `PRAGMA user_version`
@@ -685,7 +706,7 @@ mod tests {
         }
         // Mark a channel, then edit the system: drop its second channel,
         // add one with a DCS code, rename it and move it to another county.
-        let police = systems[0].id;
+        let police = db.find("police").unwrap().id;
         let plan = db.plan(&[police]).unwrap();
         let (first, second) = (plan.entries[0].tag.clone(), plan.entries[1].tag.clone());
         db.set_priority(plan.entries[0].channel_id.unwrap(), true).unwrap();
@@ -717,10 +738,18 @@ mod tests {
         let mut db = Db::open(&dir.join("channels.db")).unwrap();
         // The starter systems' county, made from their location.
         let counties = db.counties().unwrap();
-        assert_eq!(counties.len(), 1);
         assert_eq!(
-            (counties[0].name.as_str(), counties[0].systems),
-            ("San Mateo County, CA", 3)
+            counties
+                .iter()
+                .map(|k| (k.name.as_str(), k.systems))
+                .collect::<Vec<_>>(),
+            [
+                ("Loving County, TX", 1),
+                ("Pitkin County, CO", 1),
+                ("San Mateo County, CA", 3),
+                ("Summit County, UT", 1),
+                ("Teton County, WY", 1),
+            ]
         );
 
         // An import says which county it belongs to: a new one is made, an
@@ -741,7 +770,17 @@ mod tests {
         db.rename_system(police, "Police", "Marin County, CA").unwrap();
         db.rename_system(fire, "Fire", "").unwrap();
         let names: Vec<String> = db.counties().unwrap().into_iter().map(|k| k.name).collect();
-        assert_eq!(names, ["Marin County, CA", "San Mateo County, CA"]);
+        assert_eq!(
+            names,
+            [
+                "Loving County, TX",
+                "Marin County, CA",
+                "Pitkin County, CO",
+                "San Mateo County, CA",
+                "Summit County, UT",
+                "Teton County, WY",
+            ]
+        );
         assert_eq!(system(&db, fire).county, None);
 
         // Removing a county removes what it owns.
@@ -760,16 +799,25 @@ mod tests {
         let systems = db.systems().unwrap();
         assert_eq!(
             systems.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
-            ["Police", "Fire", "County P25"]
+            [
+                "Public Safety",
+                "Public Safety",
+                "Police",
+                "Fire",
+                "County P25",
+                "Public Safety",
+                "Public Safety"
+            ]
         );
-        assert_eq!(db.find("police").unwrap().id, systems[0].id);
-        assert_eq!(db.find("p25").unwrap().id, systems[2].id);
+        let police = db.find("police").unwrap().id;
+        let p25 = db.find("p25").unwrap().id;
+        assert_eq!((police, p25), (systems[2].id, systems[4].id));
         assert!(db.find("nowhere").is_err());
 
         // Two systems in one plan keep their own talkgroups apart.
-        let plan = db.plan(&[systems[2].id, systems[2].id]).unwrap();
+        let plan = db.plan(&[p25, p25]).unwrap();
         assert_eq!(plan.p25.len(), 54);
-        let plan = db.plan(&[systems[0].id]).unwrap();
+        let plan = db.plan(&[police]).unwrap();
         assert_eq!(plan.entries.len(), 33);
         let first = plan.entries[0].channel_id.unwrap();
         db.set_skip(first, true).unwrap();
@@ -860,16 +908,16 @@ mod tests {
 
         // Skips persist; reopening doesn't seed a second time.
         let mut db = Db::open(&path).unwrap();
-        assert_eq!(db.systems().unwrap().len(), 4);
-        let reloaded = db.plan(&[systems[0].id]).unwrap();
+        assert_eq!(db.systems().unwrap().len(), 8);
+        let reloaded = db.plan(&[police]).unwrap();
         assert!(reloaded.entries[0].skip && reloaded.entries[0].priority && !reloaded.entries[1].priority);
         // Marking for recording brings priority with it; unmarking leaves it.
         let second = reloaded.entries[1].channel_id.unwrap();
         db.set_record(second, true).unwrap();
-        let marked = db.plan(&[systems[0].id]).unwrap();
+        let marked = db.plan(&[police]).unwrap();
         assert!(marked.entries[1].record && marked.entries[1].priority && !marked.entries[2].record);
         db.set_record(second, false).unwrap();
-        let unmarked = db.plan(&[systems[0].id]).unwrap();
+        let unmarked = db.plan(&[police]).unwrap();
         assert!(!unmarked.entries[1].record && unmarked.entries[1].priority);
         assert_eq!(db.setting("volume").as_deref(), Some("4.5"));
         let digital = db.plan(&[digital_id]).unwrap();
@@ -877,9 +925,9 @@ mod tests {
             digital.entries[0].kind,
             Kind::Digital { nac: Some(0x293), .. }
         ));
-        db.remove_system(systems[0].id).unwrap();
-        assert_eq!(db.systems().unwrap().len(), 3);
-        assert!(db.plan(&[systems[0].id]).is_err());
+        db.remove_system(police).unwrap();
+        assert_eq!(db.systems().unwrap().len(), 7);
+        assert!(db.plan(&[police]).is_err());
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

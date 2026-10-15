@@ -1,0 +1,27 @@
+[package]
+name = "hackrf"
+version = "1.0.1"
+edition = "2024"
+license = "AGPL-3.0-only"
+description = "Safe interface to HackRF receivers (HackRF One and its relatives) through libhackrf"
+
+[features]
+# Compile libhackrf into the program from vendor/hackrf (a git submodule),
+# along with libusb, instead of loading the system's at run time. Always so
+# on Windows, where there is no system libhackrf and no official build of
+# one to put beside the program.
+vendored = ["dep:libusb1-sys"]
+
+[dependencies]
+receiver = { path = "../receiver", version = "1.0.1" }
+libusb1-sys = { version = "0.7", features = ["vendored"], optional = true }
+
+# Elsewhere the system's libhackrf is loaded at run time.
+[target.'cfg(not(windows))'.dependencies]
+libloading = "0.8"
+
+[target.'cfg(windows)'.dependencies]
+libusb1-sys = { version = "0.7", features = ["vendored"] }
+
+[build-dependencies]
+cc = "1"

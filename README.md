@@ -8,7 +8,7 @@
 [![Android](https://github.com/nathantodd-devel/radio-software/actions/workflows/android.yml/badge.svg)](https://github.com/nathantodd-devel/radio-software/actions/workflows/android.yml)
 [![Release](https://github.com/nathantodd-devel/radio-software/actions/workflows/release.yml/badge.svg)](https://github.com/nathantodd-devel/radio-software/actions/workflows/release.yml)
 
-**DMPS**, the Digital Mobile Police Scanner, is a radio scanner for [Airspy](https://airspy.com) and RTL-SDR software-defined receivers,
+**DMPS**, the Digital Mobile Police Scanner, is a radio scanner for [Airspy](https://airspy.com), HackRF and RTL-SDR software-defined receivers,
 written in Rust.
 
 Instead of stepping through channels one at a time like a traditional scanner, it receives a
@@ -56,13 +56,14 @@ It ships with channel lists for San Mateo County, California, and can import any
   frequency are received at once. Encrypted calls are skipped.
 - **Three scan modes:** receive one band; hop between bands when the selected systems are too
   far apart; or scan one channel at a time at a low sample rate for less CPU and USB load.
-- **Two kinds of receiver:** Airspy R2 and Mini, and RTL-SDR dongles (RTL2832U with an R820T2
-  or R860 tuner, and the other tuners librtlsdr supports).
+- **Three kinds of receiver:** Airspy R2 and Mini; HackRF One and its relatives (receiving
+  only: nothing here transmits); and RTL-SDR dongles (RTL2832U with an R820T2 or R860 tuner,
+  and the other tuners librtlsdr supports).
 - **Several receivers at once.** Every receiver attached is used: the bands are shared out
   between them, so two radios cover two bands with no hopping, or hop half as far each. One
   call plays at a time, as with a single receiver; the rest are still logged and recorded.
-- **Selectable sample rate** (10 or 2.5 MSPS on an Airspy R2; 2.4, 2.048 or 1.024 MSPS on an
-  RTL-SDR).
+- **Selectable sample rate** (10 or 2.5 MSPS on an Airspy R2; 10, 8, 5 or 2.5 MSPS on a
+  HackRF; 2.4, 2.048 or 1.024 MSPS on an RTL-SDR).
 - **Per-channel controls:** hold, skip, priority (interrupts other traffic) and record.
 - **Recording and replay.** Every call is recorded; finished calls can be replayed from the
   activity log.
@@ -91,6 +92,7 @@ This is a young project. What has and has not been exercised:
 | Android app | Receives on a Pixel 10 with a radio on a USB adapter, in the foreground and the background. Checked from the phone's own figures (calls logged, no audio underruns); the sound itself judged only by ear, by its owner |
 | Several receivers at once | Tested with two and three simulated receivers; never run with two real radios. Both are processed on one CPU core, so two radios at 10 MSPS may be more than a slower computer keeps up with |
 | RTL-SDR | Tested on air with an R820T dongle on Linux: analog FM and P25 Phase 1 |
+| HackRF | Never run with a HackRF: written from libhackrf's interface without one to try. Checked only that the library loads and reports no device, on Linux. The Windows build, with the library compiled in, is built and started (with no HackRF) by CI and nowhere else. Desktop only, not the Android app |
 | P25 Phase 2 | Tested on air on the BART system with an Airspy R2: calls are logged with their talkgroups and radios, and recorded. The speech has not been listened to by a person. Tried on one system only, and only with every frequency in one band; not with an RTL-SDR following the control channel |
 | P25 control-channel following | Tested on air on the San Mateo County system with an RTL-SDR: grants decode and the receiver goes to the calls |
 | DCS squelch | Tested with synthetic signals only; never tried on a real DCS channel |
@@ -104,21 +106,23 @@ RTL-SDR direct sampling (HF).
 
 ## Requirements
 
-- An Airspy R2 or Airspy Mini, or an RTL-SDR dongle. An RTL-SDR sees about a fifth as much
+- An Airspy R2 or Airspy Mini, a HackRF, or an RTL-SDR dongle. An RTL-SDR sees about a fifth as much
   spectrum at once, so it hops between bands more; an R820T2 or R860 tuner covers roughly
   24 MHz to 1.76 GHz.
 - An antenna suited to the bands you want. Weak, hissy audio usually means the antenna.
-- **Linux:** `aplay`, and the library for your receiver (`libairspy` or `librtlsdr`).
-  - Fedora: `sudo dnf install alsa-utils airspyone_host rtl-sdr`
-  - Debian/Ubuntu: `sudo apt install alsa-utils libairspy0 rtl-sdr`
+- **Linux:** `aplay`, and the library for your receiver (`libairspy`, `libhackrf` or
+  `librtlsdr`).
+  - Fedora: `sudo dnf install alsa-utils airspyone_host hackrf rtl-sdr`
+  - Debian/Ubuntu: `sudo apt install alsa-utils libairspy0 libhackrf0 rtl-sdr`
 
   These packages also install the udev rules that let you use the receiver without being
   root. If an RTL-SDR won't open, the kernel's DVB-T driver may be holding it: blacklist
   `dvb_usb_rtl28xxu` and plug it in again.
   The desktop app needs Wayland or X11 and a Vulkan-capable GPU.
 - **Windows:** the release zip includes the Airspy and RTL-SDR libraries. An RTL-SDR also
-  needs the WinUSB driver installed once with [Zadig](https://zadig.akeo.ie).
-- **macOS:** `brew install airspy` or `brew install librtlsdr`.
+  needs the WinUSB driver installed once with [Zadig](https://zadig.akeo.ie). A HackRF needs
+  nothing: its library is built into the programs.
+- **macOS:** `brew install airspy`, `brew install hackrf` or `brew install librtlsdr`.
 
 ## Install
 
@@ -209,12 +213,12 @@ scanner-ui
 | Setting | What it does |
 |---|---|
 | Scan mode | *One band*, *Hop between bands* (default) or *One channel at a time*. |
-| Receiver | *Automatic* (an Airspy if there is one, otherwise an RTL-SDR), *Airspy* or *RTL-SDR*. |
+| Receiver | *Automatic* (every receiver attached), or one kind only: *Airspy*, *HackRF* or *RTL-SDR*. |
 | Sample rate | One of the rates your receiver offers. Lower covers less spectrum with less load. |
 | Time on a quiet band | How long to wait on a band with no traffic before moving on. |
 | Longest turn on a busy band | A band with constant traffic is left after this long so others get a turn. |
-| Receiver gain | 0 to 21: the Airspy's linearity gain, or that far up an RTL-SDR tuner's range. |
-| Frequency correction | For RTL-SDR dongles whose crystal is off, in parts per million. |
+| Receiver gain | 0 to 21: the Airspy's linearity gain, or that far up a HackRF's or an RTL-SDR tuner's range. |
+| Frequency correction | For RTL-SDR dongles and HackRFs whose crystal is off, in parts per million. |
 | Bias tee | Powers an amplifier at the antenna through the coax. Leave off unless you have one. |
 | Keep recordings | On: recordings are kept. Off: deleted when the app closes (except channels marked Rec). |
 | Theme | Colours for the app. |
@@ -235,9 +239,9 @@ Useful options:
 
 | Option | Meaning |
 |---|---|
-| `--device auto\|airspy\|rtlsdr` | Which receivers to use: every one attached (`auto`, the default) or every one of a kind |
+| `--device auto\|airspy\|hackrf\|rtlsdr` | Which receivers to use: every one attached (`auto`, the default) or every one of a kind |
 | `-g`, `--gain N` | Receiver gain, 0-21 (default 17) |
-| `--ppm N` | Frequency correction for an RTL-SDR, in parts per million |
+| `--ppm N` | Frequency correction for an RTL-SDR or a HackRF, in parts per million |
 | `--bias-tee` | Power an antenna amplifier through the coax |
 | `-s`, `--squelch DB` | Carrier level over the noise floor needed to open (default 6) |
 | `--scan hop\|band\|channel` | Scan mode (default `hop`) |
@@ -428,7 +432,10 @@ as starting points.
 
 ## Building from source
 
-You need a recent stable Rust toolchain.
+You need a recent stable Rust toolchain. On Windows you also need the HackRF project's source,
+which is a git submodule here and is compiled into the HackRF driver: clone with
+`git clone --recurse-submodules`, or in a clone you already have run
+`git submodule update --init`. Nothing else uses it.
 
 ```sh
 cargo build --release
@@ -525,7 +532,7 @@ cost nothing to run.
 
 | Workflow | Runs on | Jobs | Typical time |
 |---|---|---|---|
-| **CI** (`ci.yml`) | every push to `main` and every pull request | Format, lint (`clippy -D warnings`), build and test the workspace; format and build the browser client | 1 min; 2.5 min |
+| **CI** (`ci.yml`) | every push to `main` and every pull request | Format, lint (`clippy -D warnings`), build and test the workspace; build and try the HackRF driver on Windows; format and build the browser client | 1 min; 2.5 min |
 | **Android** (`android.yml`) | pushes to `main` and pull requests that change `mobile/`, or by hand | Build a debug APK | 2.5-4.5 min |
 | **Release** (`release.yml`) | a pushed tag like `v0.3.0`, or by hand | Browser client (4 min), then Linux (7 min), Windows (12 min) and macOS (7 min) packages, the Android APK (8.5 min), and publishing the release | about 17 min |
 
@@ -579,6 +586,7 @@ Things to know:
 | `crates/drivers/receiver` | The `Driver` and `Receiver` traits every radio driver implements |
 | `crates/drivers/airspy` | Airspy driver, through `libairspy`: the system's, loaded at run time, or a compiled-in copy on Android |
 | `crates/drivers/rtlsdr` | RTL-SDR driver, through the system's `librtlsdr`, loaded at run time |
+| `crates/drivers/hackrf` | HackRF driver, through `libhackrf`: the system's, loaded at run time, or on Windows compiled in from the HackRF project's source, a git submodule |
 | `crates/drivers/audio` | Audio output: `aplay` on Linux, the native audio API elsewhere |
 | `mobile` | The Android app (separate cargo project) |
 | `installer` | The Windows installer's Inno Setup script |
@@ -630,8 +638,8 @@ with a driver that plays back a synthetic signal.
 
 The scanner needs sample rates that are whole multiples of 1000, and expects a driver to drop
 samples (and count them) rather than stall if it falls behind. The
-[Airspy](crates/drivers/airspy/src/lib.rs) and [RTL-SDR](crates/drivers/rtlsdr/src/lib.rs)
-drivers are the examples to follow.
+[Airspy](crates/drivers/airspy/src/lib.rs), [HackRF](crates/drivers/hackrf/src/lib.rs) and
+[RTL-SDR](crates/drivers/rtlsdr/src/lib.rs) drivers are the examples to follow.
 
 ## Legal
 
@@ -660,5 +668,6 @@ Parts that come from elsewhere keep their own licences, all compatible with the 
   GPL-3.0-or-later, AGPL-3.0-or-later or Apache-2.0.
 - The Windows release bundles `airspy.dll` (BSD 3-clause), `libusb-1.0.dll` and
   `pthreadVC2.dll` (LGPL 2.1), `rtlsdr.dll` (GPL 2.0 or later), and Microsoft's Visual C++
-  runtimes.
+  runtimes. Its programs have libhackrf (BSD 3-clause; a submodule at
+  `crates/drivers/hackrf/vendor/hackrf`) and libusb (LGPL 2.1) compiled in.
 - Rust dependencies are under their own licences, mostly MIT or Apache-2.0; GPUI is Apache-2.0.

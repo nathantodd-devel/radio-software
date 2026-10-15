@@ -1,0 +1,4 @@
+[submodule "crates/drivers/hackrf/vendor/hackrf"]
+	path = crates/drivers/hackrf/vendor/hackrf
+	url = https://github.com/greatscottgadgets/hackrf
+	shallow = true

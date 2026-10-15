@@ -11,6 +11,8 @@ use crate::plan::{Kind, Plan};
 use chrono::Local;
 
 const LOG_LEN: usize = 200;
+/// Spectrum reports kept per receiver: 20 seconds' worth.
+pub const SPECTRUM_ROWS: usize = 200;
 
 /// One transmission in the activity log.
 pub struct Call {
@@ -44,6 +46,17 @@ pub struct TunedReceiver {
     pub name: String,
     /// (which of its bands, of how many, from Hz, to Hz), once it has tuned.
     pub band: Option<(usize, usize, f64, f64)>,
+    /// What it has picked up, newest first: see [`Event::Spectrum`].
+    pub spectrum: VecDeque<SpectrumRow>,
+}
+
+/// One [`Event::Spectrum`] report.
+#[derive(Clone)]
+pub struct SpectrumRow {
+    pub lo_hz: f64,
+    pub hi_hz: f64,
+    /// Power in equal slices from `lo_hz` to `hi_hz`, in dB of full scale.
+    pub db: Vec<f32>,
 }
 
 #[derive(Default)]
@@ -192,6 +205,7 @@ impl Session {
                             let receiver = |name: &String| TunedReceiver {
                                 name: name.clone(),
                                 band: None,
+                                spectrum: VecDeque::with_capacity(SPECTRUM_ROWS),
                             };
                             live.receivers = names.iter().map(receiver).collect();
                         }
@@ -207,6 +221,29 @@ impl Session {
                             }
                             if live.receivers.len() < 2 {
                                 live.band = (count > 1).then_some((index, count, lo_hz, hi_hz));
+                            }
+                        }
+                        Event::Spectrum {
+                            receiver,
+                            lo_hz,
+                            hi_hz,
+                            db,
+                        } => {
+                            if let Some(receiver) = live.receivers.get_mut(receiver) {
+                                let rows = &mut receiver.spectrum;
+                                // The oldest row's memory is reused for the newest.
+                                let mut row = match rows.len() {
+                                    SPECTRUM_ROWS => rows.pop_back().unwrap(),
+                                    _ => SpectrumRow {
+                                        lo_hz,
+                                        hi_hz,
+                                        db: Vec::new(),
+                                    },
+                                };
+                                (row.lo_hz, row.hi_hz) = (lo_hz, hi_hz);
+                                row.db.clear();
+                                row.db.extend_from_slice(db);
+                                rows.push_front(row);
                             }
                         }
                         Event::Opened {

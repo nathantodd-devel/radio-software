@@ -13,6 +13,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use chrono::Local;
+use radiocore::normalize::Normalizer;
 use radiocore::{Channelizer, Complex32, NfmChannel, NfmConfig, P25Channel, P25Frame, P25p2Channel, P25p2Frame};
 use receiver::{Block, Driver, Receiver};
 
@@ -28,6 +29,14 @@ const IF_CUTOFF_HZ: f64 = 9_000.0;
 const DEFAULT_USABLE_BANDWIDTH: f64 = 0.9;
 /// Blocks (milliseconds) between [`Event::Levels`] reports.
 const LEVEL_BLOCKS: u64 = 100;
+/// Blocks between [`Event::Spectrum`] reports; each is the average of them.
+const SPECTRUM_BLOCKS: u64 = 100;
+/// Columns in a [`Event::Spectrum`] report.
+pub const SPECTRUM_COLUMNS: usize = 512;
+/// The spectrum shown is the band's span with this much more either side,
+/// as a share of it, and never narrower than [`SPECTRUM_MIN_SPAN_HZ`].
+const SPECTRUM_MARGIN: f64 = 0.05;
+const SPECTRUM_MIN_SPAN_HZ: f64 = 100_000.0;
 /// Decoded P25 speech as audio; at this scale it sits about level with the
 /// analog channels at the same volume setting.
 const P25_LEVEL: f32 = 1.0 / 32768.0;
@@ -86,7 +95,11 @@ pub fn usb_ids() -> Vec<(u16, u16)> {
 /// The kinds of receiver that come with the scanner, in the order they are
 /// looked for.
 pub fn drivers() -> Vec<Arc<dyn Driver>> {
-    vec![Arc::new(airspy::Driver), Arc::new(rtlsdr::Driver)]
+    vec![
+        Arc::new(airspy::Driver),
+        Arc::new(hackrf::Driver),
+        Arc::new(rtlsdr::Driver),
+    ]
 }
 
 /// How the channels of a plan are covered.
@@ -175,6 +188,7 @@ impl Default for Config {
 pub struct Controls {
     stop: AtomicBool,
     muted: AtomicBool,
+    normalize: AtomicBool,
     volume: AtomicU32,
     squelch_db: AtomicU32,
     pinned: AtomicUsize,
@@ -194,6 +208,7 @@ impl Controls {
         Self {
             stop: AtomicBool::new(false),
             muted: AtomicBool::new(false),
+            normalize: AtomicBool::new(false),
             volume: AtomicU32::new(volume.to_bits()),
             squelch_db: AtomicU32::new(squelch_db.to_bits()),
             pinned: AtomicUsize::new(usize::MAX),
@@ -216,6 +231,16 @@ impl Controls {
 
     pub fn set_muted(&self, muted: bool) {
         self.muted.store(muted, Relaxed);
+    }
+
+    /// Whether every channel is brought to the same loudness, so the
+    /// volume setting sets how loud everything is.
+    pub fn normalize(&self) -> bool {
+        self.normalize.load(Relaxed)
+    }
+
+    pub fn set_normalize(&self, normalize: bool) {
+        self.normalize.store(normalize, Relaxed);
     }
 
     pub fn volume(&self) -> f32 {
@@ -324,6 +349,15 @@ pub enum Event<'a> {
         count: usize,
         lo_hz: f64,
         hi_hz: f64,
+    },
+    /// What receiver `receiver` picked up over the last tenth of a second
+    /// from `lo_hz` to `hi_hz`: the power in each of [`SPECTRUM_COLUMNS`]
+    /// equal slices of that span, in dB of full scale.
+    Spectrum {
+        receiver: usize,
+        lo_hz: f64,
+        hi_hz: f64,
+        db: &'a [f32],
     },
 }
 
@@ -817,6 +851,8 @@ struct Band {
     lo_hz: f64,
     hi_hz: f64,
     center_hz: f64,
+    /// What [`Event::Spectrum`] reports cover while tuned here.
+    spectrum_hz: (f64, f64),
     channelizer: Channelizer,
     rxs: Vec<Rx>,
     /// Upper bound on the analog channels' noise floors.
@@ -843,6 +879,10 @@ struct Tuner {
     /// The band to go back to after following a call: the control
     /// channel's.
     return_to: Option<usize>,
+    /// The power summed over `spectrum_blocks` blocks of the tuned band,
+    /// for the next [`Event::Spectrum`].
+    spectrum: Vec<f32>,
+    spectrum_blocks: u32,
 }
 
 /// Receive until the input ends or [`Controls::stop`] is called.
@@ -956,10 +996,20 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
             }
             let channelizer = Channelizer::new(found.rate as f64, BIN_HZ, CHANNEL_BINS, IF_CUTOFF_HZ, &offsets);
             assert_eq!(block_len, channelizer.out_len());
+            // Wider than the band to show its edges, but not past what the
+            // receiver hands over.
+            let mid = (tuning.lo_hz + tuning.hi_hz) / 2.0;
+            let half = ((tuning.hi_hz - tuning.lo_hz) * (0.5 + SPECTRUM_MARGIN)).max(SPECTRUM_MIN_SPAN_HZ / 2.0);
+            let edge = found.rate as f64 / 2.0 - BIN_HZ;
+            let spectrum_hz = (
+                (mid - half).max(tuning.center_hz - edge),
+                (mid + half).min(tuning.center_hz + edge),
+            );
             bands.push(Band {
                 lo_hz: tuning.lo_hz,
                 hi_hz: tuning.hi_hz,
                 center_hz: tuning.center_hz,
+                spectrum_hz,
                 channelizer,
                 rxs,
                 floor_cap: f32::INFINITY,
@@ -1001,6 +1051,8 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
             turn_blocks: 0,
             jump: None,
             return_to: None,
+            spectrum: vec![0.0; SPECTRUM_COLUMNS],
+            spectrum_blocks: 0,
         });
     }
 
@@ -1019,6 +1071,9 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
     // The radio heard on each open P25 entry, once it has said who it is.
     let mut row_unit: Vec<Option<u32>> = vec![None; rows];
     let mut recorders: Vec<Option<(wav::Writer, PathBuf)>> = (0..rows).map(|_| None).collect();
+    // Each channel keeps its own, so it is at the right level as soon as it
+    // is heard again.
+    let mut normalizers: Vec<Normalizer> = (0..rows).map(|_| Normalizer::new(AUDIO_RATE as f32)).collect();
     let mut pcm = Vec::with_capacity(audio_len);
     let silence = vec![0i16; audio_len];
     let mut floors = Vec::with_capacity(rows);
@@ -1089,6 +1144,10 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
                     rx.tdma.process(samples);
                 }
             });
+            let (lo_hz, hi_hz) = band.spectrum_hz;
+            band.channelizer
+                .add_power(lo_hz - band.center_hz, hi_hz - band.center_hz, &mut tuner.spectrum);
+            tuner.spectrum_blocks += 1;
 
             for (i, rx) in rxs.iter_mut().enumerate() {
                 let Rx::P25(rx) = rx else { continue };
@@ -1272,6 +1331,27 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
             }
             on_event(Event::Levels(&levels));
         }
+        if blocks.is_multiple_of(SPECTRUM_BLOCKS) {
+            for (t, tuner) in tuners
+                .iter_mut()
+                .enumerate()
+                .filter(|(_, tuner)| tuner.spectrum_blocks > 0)
+            {
+                let blocks = tuner.spectrum_blocks as f32;
+                for p in &mut tuner.spectrum {
+                    *p = 10.0 * (*p / blocks).max(1e-20).log10();
+                }
+                let (lo_hz, hi_hz) = tuner.bands[tuner.tuned].spectrum_hz;
+                on_event(Event::Spectrum {
+                    receiver: t,
+                    lo_hz,
+                    hi_hz,
+                    db: &tuner.spectrum,
+                });
+                tuner.spectrum.fill(0.0);
+                tuner.spectrum_blocks = 0;
+            }
+        }
         blocks += 1;
 
         let priority = (0..rows).find(|&c| open[c] && controls.priority(c));
@@ -1329,6 +1409,9 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
             }
             if open[c] {
                 open_blocks[c] += 1;
+                if controls.normalize() {
+                    normalizers[c].process(&mut audio[c]);
+                }
                 if let Some((w, _)) = &mut recorders[c] {
                     to_pcm(&audio[c], volume, &mut pcm);
                     w.write(&pcm);
@@ -1489,6 +1572,9 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
             tuner.tuned = next;
             tuner.idle_blocks = 0;
             tuner.turn_blocks = 0;
+            // A spectrum report is all of one band.
+            tuner.spectrum.fill(0.0);
+            tuner.spectrum_blocks = 0;
             if let Err(e) = tuner.input.tune(tuner.bands[next].center_hz, RETUNE_SETTLE_SECS) {
                 failure = Some(format!("{}: {e}", tuner.name));
                 break 'scan;
@@ -1646,9 +1732,24 @@ mod tests {
 
         let controls = Controls::new(&plan, 3.0, 6.0);
         let (mut opened, mut closed_after) = (0, 0.0);
+        // Where each spectrum report was loudest, and how far above its
+        // median that was.
+        let mut peaks = Vec::new();
         let result = run(&plan, &cfg, &controls, |event| match event {
             Event::Opened { channel: 0, .. } => opened += 1,
             Event::Closed { secs, .. } => closed_after = secs,
+            Event::Spectrum { lo_hz, hi_hz, db, .. } => {
+                assert_eq!(db.len(), SPECTRUM_COLUMNS);
+                assert!(lo_hz < CHANNEL_HZ && CHANNEL_HZ < hi_hz && hi_hz - lo_hz >= SPECTRUM_MIN_SPAN_HZ);
+                let loudest = (0..db.len()).max_by(|&a, &b| db[a].total_cmp(&db[b])).unwrap();
+                let mut sorted = db.to_vec();
+                sorted.sort_by(f32::total_cmp);
+                let column_hz = (hi_hz - lo_hz) / db.len() as f64;
+                peaks.push((
+                    lo_hz + (loudest as f64 + 0.5) * column_hz,
+                    db[loudest] - sorted[db.len() / 2],
+                ));
+            }
             _ => {}
         });
         // The playback runs out, which the engine reports as the device going away.
@@ -1657,6 +1758,13 @@ mod tests {
         assert_eq!(opened, 1);
         // Keyed for 1.4 s; the tone takes a little while to be recognised.
         assert!((1.0..1.6).contains(&closed_after), "open for {closed_after} s");
+        // While keyed, the spectrum stands out on the channel.
+        let keyed: Vec<_> = peaks.iter().filter(|(_, over)| *over > 30.0).collect();
+        assert!(keyed.len() >= 10, "{peaks:?}");
+        assert!(
+            keyed.iter().all(|(hz, _)| (hz - CHANNEL_HZ).abs() < 5_000.0),
+            "{keyed:?}"
+        );
     }
 
     #[test]
@@ -1742,11 +1850,11 @@ mod tests {
     #[test]
     fn names_the_drivers_it_knows() {
         let ids: Vec<&str> = drivers().iter().map(|d| d.id()).collect();
-        assert_eq!(ids, ["airspy", "rtlsdr"]);
+        assert_eq!(ids, ["airspy", "hackrf", "rtlsdr"]);
         let cfg = Config {
             source: Source::Kind("teapot".into()),
             ..Config::default()
         };
-        assert!(probe(&cfg).err().unwrap().contains("airspy, rtlsdr"));
+        assert!(probe(&cfg).err().unwrap().contains("airspy, hackrf, rtlsdr"));
     }
 }

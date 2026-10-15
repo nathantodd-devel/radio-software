@@ -1,0 +1,6 @@
+# Loving County, Texas (Mentone): VHF analog FM.
+# Source: RadioReference county database (ctid 2673), read 2026-10-14.
+# freq_mhz, ctcss_hz, width (w = 5 kHz deviation, n = 2.5 kHz), tag, description
+# Earlier lines win when several channels are active at once.
+
+155.5950, 85.4, w, Loving Co SO,       Sheriff and Public Safety

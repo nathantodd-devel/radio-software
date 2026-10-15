@@ -1,0 +1,37 @@
+# Pitkin County, Colorado (Aspen): VHF/UHF analog FM.
+# Source: RadioReference county database (ctid 289), read 2026-10-14.
+# freq_mhz, ctcss_hz, width (w = 5 kHz deviation, n = 2.5 kHz), tag, description
+# Earlier lines win when several channels are active at once.
+#
+# The county, Aspen and Basalt also use the State of Colorado DTRS (P25
+# trunked), which isn't here. Left out: Aspen Sanitation's DMR channel.
+
+# Law enforcement
+155.2500, 100.0, w, Pitkin LE,         County Law Dispatch
+154.8150, -,     w, Pitkin LE TC,      County Law Tactical
+155.5350, 100.0, w, PitkinSOTac,       Sheriff Tactical
+
+# Fire and EMS
+151.0700, 173.8, w, PitkinFire1,       Fire 1
+155.7825, 173.8, n, PitkinFire2,       Fire 2
+153.8450, 114.8, n, Aspen Fire,        Aspen Fire Protection District (Red)
+154.4450, 100.0, n, Basalt Fire,       Basalt Fire Department
+154.3850, 162.2, n, Snowmass FD,       Snowmass Fire Department
+154.3250, -,     w, PitkinFireTc,      Fire Tactical / Training
+153.9500, -,     w, Rdstn/CarbE,       Fire - Elephant
+154.0000, 186.2, w, MarbleFire,        Fire - Marble
+463.0750, 141.3, n, MED-4,             EMS to Aspen Valley Hospital
+154.9650, -,     w, Pitkin Page,       County Paging
+
+# Operations
+154.8600, 100.0, n, Aspen Ops,         Aspen/Sunlight Operations and Special Events
+
+# Public works, schools and transit
+151.0100, 100.0, w, PitkinCoR&B,       Road & Bridge
+151.2350, 100.0, w, PitkinCoSvcs,      County Services
+154.0400, -,     n, AspenPubWrks,      Aspen Public Works
+155.8200, -,     n, AspenParking,      Aspen Parking Officers
+155.2200, -,     n, AspenSchools,      School District RE-1 (Bus Coordination)
+155.5950, -,     n, BasaltPubWks,      Basalt Public Works
+156.2400, -,     n, Snowmass PW,       Snowmass Public Works
+452.8500, 151.4, n, Snomass Shuttle,   Snowmass Village Shuttle

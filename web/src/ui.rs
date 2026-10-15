@@ -574,7 +574,7 @@ impl Client {
         };
         let choices = || div().flex().flex_wrap().justify_end().gap_2();
         let (volume, squelch_db, gain, ppm) = (options.volume, options.squelch_db, options.gain, options.ppm);
-        let (muted, bias_tee) = (options.muted, options.bias_tee);
+        let (muted, bias_tee, normalize) = (options.muted, options.bias_tee, options.normalize);
 
         let receiver = match (&options.receiver, options.span_hz) {
             (Some(name), Some(span)) => format!("{name} · receives {:.1} MHz at once", span / 1e6),
@@ -607,6 +607,14 @@ impl Client {
                 div().child(self.asks(
                     button("mute", if muted { "Muted" } else { "Off" }, muted, ERROR),
                     move || ClientMessage::SetMuted { muted: !muted },
+                    cx,
+                )),
+            ))
+            .child(row(
+                "Normalize volume",
+                div().child(self.asks(
+                    button("normalize", if normalize { "On" } else { "Off" }, normalize, HOLD),
+                    move || ClientMessage::SetNormalize { on: !normalize },
                     cx,
                 )),
             ))

@@ -40,15 +40,18 @@ as RR_USERNAME, RR_PASSWORD and RR_APP_KEY. The IDs are the numbers in the
 page addresses: radioreference.com/db/sid/ID and .../db/browse/ctid/ID.
 
       --device KIND  auto (every receiver attached, sharing the bands between
-                     them; the default), or one kind only: airspy or rtlsdr
+                     them; the default), or one kind only: airspy, hackrf or
+                     rtlsdr
   -g, --gain N       receiver gain 0-21 (default 17): the Airspy's linearity
-                     gain, or that far up an RTL-SDR tuner's range
-      --ppm N        frequency correction for an RTL-SDR's crystal, in parts
-                     per million (default 0)
+                     gain, or that far up a HackRF's or an RTL-SDR tuner's range
+      --ppm N        frequency correction for an RTL-SDR's or a HackRF's
+                     crystal, in parts per million (default 0)
       --bias-tee     power an antenna amplifier through the coax
   -s, --squelch DB   carrier level over the noise floor to open (default 6)
       --hold SECS    stay on a channel this long after it goes quiet (default 1.5)
       --volume X     audio gain (default 3)
+      --no-normalize leave each channel at its own loudness instead of
+                     bringing them all to the same level
       --record DIR   save every transmission on every channel as a WAV file
       --record-marked DIR
                      save the transmissions of channels marked for recording
@@ -83,6 +86,7 @@ struct Options {
     squelch_db: f32,
     volume: f32,
     db: PathBuf,
+    normalize: bool,
     name: Option<String>,
     location: Option<String>,
     sites: Option<PathBuf>,
@@ -106,6 +110,7 @@ fn parse_args() -> Options {
         squelch_db: 6.0,
         volume: 3.0,
         db: Db::default_path(),
+        normalize: true,
         name: None,
         location: None,
         sites: None,
@@ -137,6 +142,7 @@ fn parse_args() -> Options {
             "-s" | "--squelch" => o.squelch_db = num(&a, value()),
             "--hold" => o.config.hold_secs = num(&a, value()),
             "--volume" => o.volume = num(&a, value()),
+            "--no-normalize" => o.normalize = false,
             "--record" => o.config.record = Some(PathBuf::from(value())),
             "--record-marked" => o.config.record_marked = Some(PathBuf::from(value())),
             "--rate" => o.config.rate = Some(num(&a, value())),
@@ -160,6 +166,7 @@ fn parse_args() -> Options {
             "--dir" => o.dir = Some(PathBuf::from(value())),
             "-v" | "--version" => {
                 println!("scanner {} (Digital Mobile Police Scanner)", update::VERSION);
+                println!("FFTs by {}", scanner::fft_backend());
                 exit(0)
             }
             "-h" | "--help" => {
@@ -284,6 +291,7 @@ fn import_radioreference(db: &mut Db, o: &Options, what: &str, id: &str) {
 fn scan(o: &Options, plan: Plan) {
     let (lo, hi, _) = plan.span();
     let controls = Arc::new(Controls::new(&plan, o.volume, o.squelch_db));
+    controls.set_normalize(o.normalize);
     {
         // Stop cleanly, so the receiver is released and recordings are closed.
         let controls = controls.clone();

@@ -5,12 +5,13 @@ Digital Mobile Police Scanner (DMPS) for macOS (Apple silicon)
   scanner-web  the scanner as a web page; run it and open
                http://localhost:1515/ (see `./scanner-web --help`)
 
-Works with an Airspy R2 or Mini, or an RTL-SDR dongle (RTL2832U with an
+Works with an Airspy R2 or Mini, a HackRF, or an RTL-SDR dongle (RTL2832U with an
 R820T2 or R860 tuner, among others). You need the library for whichever you
 have, from Homebrew:
 
   brew install airspy        # for an Airspy
   brew install librtlsdr     # for an RTL-SDR
+  brew install hackrf        # for a HackRF
 
 These programs aren't signed. If macOS refuses to open them, clear the
 download flag first:

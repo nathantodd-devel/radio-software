@@ -1,0 +1,24 @@
+# Teton County, Wyoming (Jackson): VHF analog narrow FM.
+# Source: RadioReference county database (ctid 3143), read 2026-10-14.
+# freq_mhz, ctcss_hz, width (w = 5 kHz deviation, n = 2.5 kHz), tag, description
+# Earlier lines win when several channels are active at once.
+#
+# The county and Jackson also use WyoLink (P25 trunked), which isn't here.
+
+# Law enforcement
+155.4150, 100.0, n, TetonCo SO 1,      Teton County and Jackson Law Dispatch
+154.7250, 107.2, n, TetonCo SO 2,      Teton County and Jackson Law Tactical
+
+# Fire
+155.7150, 107.2, n, Jackson Fire 1,    Jackson Fire 1
+154.3250, -,     n, Jackson Fire 2,    Jackson Fire 2
+
+# Emergency management
+156.0150, 100.0, n, Teton EMA N,       Emergency Management North
+156.0150, 107.2, n, Teton EMA S,       Emergency Management South
+
+# Public works and transit
+151.0400, 107.2, n, Teton Co Hwy,      Teton County Highway Department
+155.7450, 103.5, n, Jackson PubWks,    Jackson Public Works
+158.7450, 162.2, n, Jackson START,     Jackson START Transit
+160.2000, 123.0, n, Teton School,      Teton County School District #1

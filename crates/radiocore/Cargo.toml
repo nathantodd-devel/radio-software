@@ -7,3 +7,9 @@ license = "AGPL-3.0-only"
 [dependencies]
 rustfft = "6"
 blip25-vocoder = { version = "1.0", default-features = false, features = ["decode"] }
+libloading = { version = "0.8", optional = true }
+
+[features]
+# Do the channelizer's FFTs with FFTW (libfftw3f, GPL), loaded at run time.
+# Where it can't be found, RustFFT does them as without this feature.
+fftw = ["dep:libloading"]

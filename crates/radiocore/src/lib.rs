@@ -3,8 +3,10 @@
 pub mod biquad;
 pub mod channelizer;
 pub mod dcs;
+pub mod fft;
 pub mod level;
 pub mod nfm;
+pub mod normalize;
 pub mod p25;
 pub mod p25p2;
 pub mod tsbk;

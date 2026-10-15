@@ -2,21 +2,21 @@
 //! wideband I/Q stream for the cost of a single forward FFT per block.
 
 use std::f64::consts::PI;
-use std::sync::Arc;
 
 use rustfft::num_complex::Complex32;
-use rustfft::{Fft, FftPlanner};
+
+use crate::fft::Fft;
 
 pub struct Channelizer {
     n: usize,
+    bin_hz: f64,
     m: usize,
     hop: usize,
-    fft: Arc<dyn Fft<f32>>,
-    ifft: Arc<dyn Fft<f32>>,
+    fft: Fft,
+    ifft: Fft,
     window: Vec<Complex32>,
     spec: Vec<Complex32>,
     chan: Vec<Complex32>,
-    scratch: Vec<Complex32>,
     /// Prototype low-pass response for bins -m/2..m/2, scaled by 1/n.
     resp: Vec<Complex32>,
     /// Centre bin of each channel, relative to the tuned frequency.
@@ -36,9 +36,8 @@ impl Channelizer {
         );
         let hop = n / 2;
 
-        let mut planner = FftPlanner::new();
-        let fft = planner.plan_fft_forward(n);
-        let ifft = planner.plan_fft_inverse(m);
+        let mut fft = Fft::forward(n);
+        let ifft = Fft::inverse(m);
 
         // Hamming-windowed sinc no longer than hop+1 taps, so the last `hop`
         // samples of each circular convolution are free of time aliasing.
@@ -63,9 +62,9 @@ impl Channelizer {
             .map(|j| hf[j.rem_euclid(n as i64) as usize] / n as f32)
             .collect();
 
-        let scratch_len = fft.get_inplace_scratch_len().max(ifft.get_inplace_scratch_len());
         Self {
             n,
+            bin_hz,
             m,
             hop,
             fft,
@@ -73,7 +72,6 @@ impl Channelizer {
             window: vec![Complex32::ZERO; n],
             spec: vec![Complex32::ZERO; n],
             chan: vec![Complex32::ZERO; m],
-            scratch: vec![Complex32::ZERO; scratch_len],
             resp,
             bins: offsets_hz.iter().map(|f| (f / bin_hz).round() as i64).collect(),
             odd_block: false,
@@ -90,6 +88,25 @@ impl Channelizer {
         self.m / 2
     }
 
+    /// Add the power the last block had from `lo_hz` to `hi_hz` (relative to
+    /// the tuned frequency) to `columns`, which split that span evenly. Each
+    /// column gets the mean of the FFT bins in it, in units of full scale
+    /// squared; where there are fewer bins than columns, they share bins.
+    pub fn add_power(&self, lo_hz: f64, hi_hz: f64, columns: &mut [f32]) {
+        let n = self.n as i64;
+        let first = (lo_hz / self.bin_hz).ceil() as i64;
+        let bins = ((hi_hz / self.bin_hz).floor() as i64 - first + 1).max(1);
+        let count = columns.len() as i64;
+        // An unnormalised FFT of a full-scale tone peaks at n.
+        let scale = 1.0 / (self.n as f32 * self.n as f32);
+        for (c, column) in (0..).zip(columns.iter_mut()) {
+            let from = first + c * bins / count;
+            let to = (first + (c + 1) * bins / count).max(from + 1);
+            let sum: f32 = (from..to).map(|k| self.spec[k.rem_euclid(n) as usize].norm_sqr()).sum();
+            *column += sum * scale / (to - from) as f32;
+        }
+    }
+
     /// Feed exactly `hop()` samples; `sink(channel, samples)` is called once
     /// per channel with `out_len()` baseband samples.
     pub fn process(&mut self, input: &[Complex32], mut sink: impl FnMut(usize, &[Complex32])) {
@@ -97,7 +114,7 @@ impl Channelizer {
         self.window.copy_within(self.hop.., 0);
         self.window[self.n - self.hop..].copy_from_slice(input);
         self.spec.copy_from_slice(&self.window);
-        self.fft.process_with_scratch(&mut self.spec, &mut self.scratch);
+        self.fft.process(&mut self.spec);
 
         let (n, m) = (self.n as i64, self.m as i64);
         for (c, &k0) in self.bins.iter().enumerate() {
@@ -105,7 +122,7 @@ impl Channelizer {
                 let j = i as i64 - m / 2;
                 self.chan[j.rem_euclid(m) as usize] = self.spec[(k0 + j).rem_euclid(n) as usize] * r;
             }
-            self.ifft.process_with_scratch(&mut self.chan, &mut self.scratch);
+            self.ifft.process(&mut self.chan);
             let out = &mut self.chan[self.m / 2..];
             // Shifting by k0 bins restarts the mixer phase every block; with
             // 50% overlap that is a sign flip on odd blocks for odd bins.
@@ -152,5 +169,28 @@ mod tests {
         }
         let leak = out[1][96..].iter().map(|v| v.norm()).fold(0.0, f32::max);
         assert!(leak < 0.005, "adjacent channel leak {leak}");
+    }
+
+    #[test]
+    fn power_shows_where_a_tone_is() {
+        let fs = 1_000_000.0;
+        let mut ch = Channelizer::new(fs, 500.0, 96, 9_000.0, &[0.0]);
+        // 100 columns of 2 kHz from -100 kHz; the tone is in column 70.
+        let x = tone(fs, 41_000.0, ch.hop() * 4);
+        let mut columns = vec![0.0; 100];
+        for block in x.chunks_exact(ch.hop()) {
+            ch.process(block, |_, _| {});
+        }
+        ch.add_power(-100_000.0, 100_000.0, &mut columns);
+        let loudest = (0..100).max_by(|&a, &b| columns[a].total_cmp(&columns[b])).unwrap();
+        assert_eq!(loudest, 70);
+        let quiet = columns.iter().enumerate().filter(|&(c, _)| c.abs_diff(70) > 2);
+        let floor = quiet.map(|(_, &p)| p).fold(0.0, f32::max);
+        assert!(columns[70] > floor * 1000.0, "{} over {floor}", columns[70]);
+
+        // Narrower than a bin a column: neighbouring columns share bins.
+        let mut fine = vec![0.0; 40];
+        ch.add_power(40_000.0, 42_000.0, &mut fine);
+        assert!(fine.iter().all(|p| p.is_finite() && *p > 0.0));
     }
 }

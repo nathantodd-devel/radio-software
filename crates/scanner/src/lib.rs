@@ -9,3 +9,9 @@ pub mod session;
 pub mod settings;
 pub mod update;
 mod wav;
+
+/// Which library does the channelizer's FFTs: "FFTW" (with the `fftw`
+/// feature, where libfftw3f is installed) or "RustFFT".
+pub fn fft_backend() -> &'static str {
+    radiocore::fft::backend()
+}

@@ -50,6 +50,9 @@ pub struct Choice {
 pub struct Options {
     pub volume: f32,
     pub squelch_db: f32,
+    /// Every channel is brought to the same loudness.
+    #[serde(default)]
+    pub normalize: bool,
     pub muted: bool,
     /// Receiver gain, 0-21.
     pub gain: u8,
@@ -185,6 +188,9 @@ pub enum ClientMessage {
         ppm: i32,
     },
     SetBiasTee {
+        on: bool,
+    },
+    SetNormalize {
         on: bool,
     },
     SetScanMode {

@@ -2659,6 +2659,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "hackrf"
+version = "1.0.1"
+dependencies = [
+ "cc",
+ "libloading",
+ "libusb1-sys",
+ "receiver",
+]
+
+[[package]]
 name = "half"
 version = "2.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5271,6 +5281,7 @@ dependencies = [
  "audio",
  "chrono",
  "ctrlc",
+ "hackrf",
  "pgp",
  "radiocore",
  "receiver",

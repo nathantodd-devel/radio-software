@@ -50,6 +50,34 @@ jobs:
       - name: Test
         run: cargo test --workspace --locked
 
+  # On Windows libhackrf is compiled into the HackRF driver from a submodule,
+  # with a stand-in for the POSIX threads it uses: nothing on Linux builds
+  # or runs that, so it is built and tried here. Without a HackRF attached
+  # the library should load, start and find nothing.
+  hackrf-windows:
+    name: HackRF driver on Windows
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test
+        run: cargo test -p hackrf --locked
+
+      - name: Look for a HackRF
+        run: |
+          said=$(cargo run -q -p hackrf --locked --example probe 2>&1 || true)
+          echo "$said"
+          [ "$said" = "no HackRF found; is it plugged in?" ]
+
   # The browser client is a project of its own (web/): GPUI compiled to
   # WebAssembly, which needs a nightly toolchain.
   web:

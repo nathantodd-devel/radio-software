@@ -8,8 +8,8 @@
 //!   one.
 //!
 //! The scanner works with `dyn Driver` and `dyn Receiver` only, so anything
-//! that implements them can be scanned with. The `airspy` and `rtlsdr`
-//! crates are the two implementations that come with it.
+//! that implements them can be scanned with. The `airspy`, `hackrf`
+//! and `rtlsdr` crates are the implementations that come with it.
 
 use std::fmt;
 use std::sync::mpsc;

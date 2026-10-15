@@ -116,6 +116,7 @@ fn main() {
                     "scanner-web {} (Digital Mobile Police Scanner)",
                     scanner::update::VERSION
                 );
+                println!("FFTs by {}", scanner::fft_backend());
                 exit(0)
             }
             "-h" | "--help" => {

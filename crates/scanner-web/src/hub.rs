@@ -194,9 +194,9 @@ impl Hub {
                 };
                 let (volume, squelch_db) = (self.settings.volume, self.settings.squelch_db);
                 let history = std::mem::take(&mut self.history);
-                self.session = Some(Session::start_with_audio(
-                    plan, config, volume, squelch_db, history, audio,
-                ));
+                let session = Session::start_with_audio(plan, config, volume, squelch_db, history, audio);
+                session.controls.set_normalize(self.settings.normalize);
+                self.session = Some(session);
             }
             Err(e) => self.problem = Some(e),
         }
@@ -264,6 +264,7 @@ impl Hub {
             volume: s.volume,
             squelch_db: s.squelch_db,
             muted: self.session.as_ref().is_some_and(|session| session.controls.muted()),
+            normalize: s.normalize,
             gain: s.gain,
             ppm: s.ppm,
             bias_tee: s.bias_tee,
@@ -499,6 +500,12 @@ impl Hub {
             ClientMessage::SetGain { gain } => self.update(true, |s| s.gain = gain.min(21)),
             ClientMessage::SetPpm { ppm } => self.update(true, |s| s.ppm = ppm.clamp(-200, 200)),
             ClientMessage::SetBiasTee { on } => self.update(true, |s| s.bias_tee = on),
+            ClientMessage::SetNormalize { on } => {
+                self.update(false, |s| s.normalize = on);
+                if let Some(session) = &self.session {
+                    session.controls.set_normalize(on);
+                }
+            }
             ClientMessage::SetScanMode { id } => {
                 if let Some(mode) = ScanMode::from_id(&id) {
                     self.update(true, |s| s.scan = mode);

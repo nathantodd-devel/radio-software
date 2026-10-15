@@ -10,6 +10,8 @@ default-run = "scanner-ui"
 # Also run on X11 desktops. Linking it needs libxkbcommon-x11's development
 # package (see build.rs); without this feature the UI is Wayland-only on Linux.
 x11 = ["gpui/x11"]
+# Do the FFTs with FFTW when it is installed (see radiocore's Cargo.toml).
+fftw = ["scanner/fftw"]
 
 # Puts the icon into the Windows program (see build.rs).
 [build-dependencies]
