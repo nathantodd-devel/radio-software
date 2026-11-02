@@ -3,7 +3,22 @@ use std::sync::{Arc, Mutex};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream, StreamConfig};
 
+use crate::Device;
 use crate::jitter::Jitter;
+
+pub fn devices() -> Vec<Device> {
+    let Ok(outputs) = cpal::default_host().output_devices() else {
+        return Vec::new();
+    };
+    outputs
+        .filter_map(|device| {
+            Some(Device {
+                id: device.id().ok()?.to_string(),
+                name: device.description().ok()?.name().to_string(),
+            })
+        })
+        .collect()
+}
 
 pub struct Output {
     /// The audio waiting to be played, shared with the device's callback.
@@ -12,10 +27,13 @@ pub struct Output {
 }
 
 impl Output {
-    pub fn open(rate: u32) -> Result<Self, String> {
-        let device = cpal::default_host()
-            .default_output_device()
-            .ok_or("no audio output device")?;
+    pub fn open(rate: u32, device: Option<&str>) -> Result<Self, String> {
+        let host = cpal::default_host();
+        let device = match device {
+            Some(id) => id.parse().ok().and_then(|id| host.device_by_id(&id)),
+            None => host.default_output_device(),
+        }
+        .ok_or("no audio output device")?;
         let supported = device
             .default_output_config()
             .map_err(|e| format!("audio output: {e}"))?;

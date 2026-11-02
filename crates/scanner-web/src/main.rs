@@ -33,7 +33,8 @@ the page can listen and change settings.
       --port N       port to serve on (default 1515)
       --web-root DIR the built browser client (default: a `web` folder beside
                      this program, otherwise web/dist under the current folder)
-      --local-audio  also play through this computer's speakers
+      --local-audio  also play through this computer's speakers, on the
+                     output picked in the desktop app
       --db FILE      channel database (default: as for the desktop app)
       --tls-cert FILE, --tls-key FILE
                      serve over HTTPS with this certificate (PEM, with any

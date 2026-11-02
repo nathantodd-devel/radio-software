@@ -11,6 +11,8 @@ pub const AUTO_DEVICE: &str = "auto";
 
 pub struct Settings {
     pub volume: f32,
+    /// The output to play on, or empty for the system's default.
+    pub audio_device: String,
     /// Bring every channel to the same loudness.
     pub normalize: bool,
     pub squelch_db: f32,
@@ -54,6 +56,11 @@ impl Settings {
         }
     }
 
+    /// The output to play on, if one was picked.
+    pub fn audio_output(&self) -> Option<String> {
+        Some(self.audio_device.clone()).filter(|id| !id.is_empty())
+    }
+
     /// The saved settings, or the defaults for any never saved (all of
     /// them, without a database).
     pub fn load(db: Option<&Db>) -> Self {
@@ -65,6 +72,7 @@ impl Settings {
         let defaults = Config::default();
         Self {
             volume: get(db, "volume", 3.0),
+            audio_device: get(db, "audio_device", String::new()),
             normalize: get(db, "normalize", true),
             squelch_db: get(db, "squelch_db", 6.0),
             device: get(db, "device", AUTO_DEVICE.to_string()),
@@ -92,6 +100,7 @@ impl Settings {
         let selected: Vec<String> = self.selected.iter().map(i64::to_string).collect();
         let values = [
             ("volume", self.volume.to_string()),
+            ("audio_device", self.audio_device.clone()),
             ("normalize", self.normalize.to_string()),
             ("squelch_db", self.squelch_db.to_string()),
             ("device", self.device.clone()),

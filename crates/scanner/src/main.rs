@@ -15,6 +15,7 @@ const USAGE: &str = "\
 usage: scanner [options] SYSTEM...     scan one or more systems
        scanner systems                 list the systems in the channel database
        scanner channels SYSTEM...      list the channels of systems
+       scanner audio-devices           list the audio outputs for --audio-device
        scanner import FILE [--name NAME] [--county COUNTY] [--sites FILE]
        scanner remove SYSTEM
        scanner counties                list the counties and how many systems each has
@@ -64,6 +65,9 @@ page addresses: radioreference.com/db/sid/ID and .../db/browse/ctid/ID.
                      channel  one channel at a time, at the lowest rate
       --stdin        read 16-bit I/Q from stdin instead of a receiver
       --no-audio     don't play audio (useful with --record)
+      --audio-device NAME
+                     play on this output instead of the system's default
+                     (see `scanner audio-devices`)
       --dwell SECS   time to listen to a quiet band before hopping (default 1.5)
       --stay SECS    longest turn for a band that stays busy (default 20)
       --db FILE      channel database (default: dmps/channels.db beside
@@ -148,6 +152,7 @@ fn parse_args() -> Options {
             "--rate" => o.config.rate = Some(num(&a, value())),
             "--stdin" => o.config.source = Source::Stdin,
             "--no-audio" => o.config.audio = false,
+            "--audio-device" => o.config.audio_device = Some(value()),
             "--scan" => {
                 let mode = value();
                 o.config.scan = ScanMode::from_id(&mode)
@@ -288,7 +293,23 @@ fn import_radioreference(db: &mut Db, o: &Options, what: &str, id: &str) {
     }
 }
 
+fn list_audio_devices() {
+    let devices = audio::devices();
+    if devices.is_empty() {
+        println!("No audio outputs found; only the system's default can be used.");
+    }
+    for device in devices {
+        println!("{}\n    {}", device.id, device.name);
+    }
+}
+
 fn scan(o: &Options, plan: Plan) {
+    // Asked for by name, so saying it's missing beats playing elsewhere.
+    if let Some(id) = &o.config.audio_device
+        && !audio::devices().iter().any(|d| d.id == *id)
+    {
+        die(format!("no audio output {id:?}; `scanner audio-devices` lists them"));
+    }
     let (lo, hi, _) = plan.span();
     let controls = Arc::new(Controls::new(&plan, o.volume, o.squelch_db));
     controls.set_normalize(o.normalize);
@@ -444,6 +465,7 @@ fn main() {
     let words: Vec<&str> = o.words.iter().map(String::as_str).collect();
     match words.as_slice() {
         ["systems"] => list_systems(&db),
+        ["audio-devices"] => list_audio_devices(),
         ["channels", _, ..] => list_channels(&load_plan(&db, &o.words[1..])),
         ["import", file] => import(&mut db, &o, file),
         ["counties"] => {
@@ -463,7 +485,7 @@ fn main() {
         }
         ["radioreference", what @ ("system" | "county"), id] => import_radioreference(&mut db, &o, what, id),
         [
-            "channels" | "import" | "remove" | "remove-county" | "counties" | "radioreference",
+            "channels" | "import" | "remove" | "remove-county" | "counties" | "radioreference" | "audio-devices",
             ..,
         ] => die(format!("wrong arguments\n{USAGE}")),
         [] => {

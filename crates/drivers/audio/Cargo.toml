@@ -3,7 +3,7 @@ name = "audio"
 version = "1.0.1"
 edition = "2024"
 license = "AGPL-3.0-only"
-description = "Plays a stream of mono 16-bit audio on the default output device"
+description = "Plays a stream of mono 16-bit audio on an output device"
 
 # Linux plays through `aplay`, which needs no development packages to build.
 [target.'cfg(not(target_os = "linux"))'.dependencies]

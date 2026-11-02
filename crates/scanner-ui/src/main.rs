@@ -31,6 +31,7 @@ const DEFAULT_SIZE: (f32, f32) = (1460., 760.);
 const MIN_SIZE: (f32, f32) = (640., 320.);
 const THEME_LIST_WIDTH: f32 = 220.;
 const THEME_LIST_HEIGHT: f32 = 180.;
+const AUDIO_LIST_WIDTH: f32 = 320.;
 /// How small and large the panels can be dragged to, in pixels.
 const SIDEBAR_WIDTHS: (f32, f32) = (150., 520.);
 const ACTIVITY_WIDTHS: (f32, f32) = (240., 760.);
@@ -107,6 +108,10 @@ struct ScannerView {
     theme_search: Option<ThemeSearch>,
     /// Keyboard focus for typing into the theme list.
     theme_focus: FocusHandle,
+    /// The audio outputs on offer, as of when the settings page was opened.
+    audio_devices: Vec<audio::Device>,
+    /// The audio output list is dropped down.
+    audio_list_open: bool,
     /// The form for a system or channel, while one is being edited.
     editor: Option<editor::Editor>,
     editor_focus: FocusHandle,
@@ -185,6 +190,8 @@ impl ScannerView {
             themes: Vec::new(),
             theme_search: None,
             theme_focus: cx.focus_handle(),
+            audio_devices: Vec::new(),
+            audio_list_open: false,
             editor: None,
             editor_focus: cx.focus_handle(),
             filter: Filter::default(),
@@ -287,6 +294,7 @@ impl ScannerView {
                     scan: self.settings.scan,
                     dwell_secs: self.settings.dwell_secs,
                     max_stay_secs: self.settings.max_stay_secs,
+                    audio_device: self.settings.audio_output(),
                     // Always recorded, so calls can be replayed from the log;
                     // channels marked for recording are always kept.
                     record: Some(self.recordings_dir()),
@@ -548,6 +556,8 @@ impl ScannerView {
                         this.editor = None;
                         this.theme_search = None;
                         this.themes = theme::available();
+                        this.audio_devices = audio::devices();
+                        this.audio_list_open = false;
                         cx.notify();
                     },
                 )),
@@ -1285,12 +1295,95 @@ impl ScannerView {
             .into_any_element()
     }
 
+    /// Every audio output that can be picked, with what to call it: the
+    /// default, those connected, and the saved one even if it isn't.
+    fn audio_choices(&self) -> Vec<(String, String)> {
+        let saved = &self.settings.audio_device;
+        let mut choices = vec![(String::new(), "System default".to_string())];
+        choices.extend(self.audio_devices.iter().map(|d| (d.id.clone(), d.name.clone())));
+        if !choices.iter().any(|(id, _)| id == saved) {
+            choices.push((saved.clone(), format!("{saved} (not connected)")));
+        }
+        choices
+    }
+
+    /// The audio output setting's control: the current output, which drops
+    /// down into a list of the others.
+    fn audio_picker(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let current = self.settings.audio_device.clone();
+        let choices = self.audio_choices();
+        let shown = choices
+            .iter()
+            .find(|(id, _)| *id == current)
+            .map(|(_, name)| name.clone());
+        let picker = div()
+            .flex()
+            .flex_col()
+            .flex_none()
+            .w(px(AUDIO_LIST_WIDTH))
+            .gap_1()
+            .child(
+                div()
+                    .id("audio-current")
+                    .flex()
+                    .justify_between()
+                    .px_2()
+                    .rounded_md()
+                    .text_sm()
+                    .bg(rgb(theme().raised))
+                    .cursor_pointer()
+                    .hover(|style| style.opacity(0.8))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.audio_list_open = !this.audio_list_open;
+                        // Anything plugged in since the page opened.
+                        this.audio_devices = audio::devices();
+                        cx.notify();
+                    }))
+                    .child(div().truncate().children(shown))
+                    .child(div().flex_none().text_color(rgb(theme().muted)).child("▾")),
+            );
+        if !self.audio_list_open {
+            return picker.into_any_element();
+        }
+        picker
+            .child(
+                div()
+                    .id("audio-list")
+                    .max_h(px(THEME_LIST_HEIGHT))
+                    .overflow_y_scroll()
+                    .rounded_md()
+                    .bg(rgb(theme().panel))
+                    .border_1()
+                    .border_color(rgb(theme().border))
+                    .children(choices.into_iter().enumerate().map(|(i, (id, name))| {
+                        let chosen = id == current;
+                        div()
+                            .id(("audio", i))
+                            .px_2()
+                            .text_sm()
+                            .truncate()
+                            .cursor_pointer()
+                            .when(chosen, |item| item.text_color(rgb(theme().accent)))
+                            .hover(|style| style.bg(rgb(theme().raised)))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.audio_list_open = false;
+                                // The output only opens when a scan starts.
+                                this.update_settings(!chosen, |s| s.audio_device = id.clone());
+                                cx.notify();
+                            }))
+                            .child(name)
+                    })),
+            )
+            .into_any_element()
+    }
+
     fn settings_page(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let s = &self.settings;
         let (gain, scan, dwell, stay, save) = (s.gain, s.scan, s.dwell_secs, s.max_stay_secs, s.save_recordings);
         let (spectrum, normalize) = (s.show_spectrum, s.normalize);
         let (device, ppm, bias_tee) = (s.device.clone(), s.ppm, s.bias_tee);
         let rate = self.rate();
+        let audio_connected = s.audio_device.is_empty() || self.audio_devices.iter().any(|d| d.id == s.audio_device);
         // One setting: its name, what it does, and the control for it.
         let row = |name: &'static str, about: String, control: gpui::AnyElement| {
             div()
@@ -1511,6 +1604,15 @@ impl ScannerView {
                         cx.notify();
                     }))
                     .into_any_element(),
+            ))
+            .child(row(
+                "Audio output",
+                if audio_connected {
+                    "Where the sound plays.".to_string()
+                } else {
+                    "Not connected, so the sound plays on the system default for now.".to_string()
+                },
+                self.audio_picker(cx),
             ))
             .child(row(
                 "Normalize volume",

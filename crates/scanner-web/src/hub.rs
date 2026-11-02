@@ -179,6 +179,7 @@ impl Hub {
                     record: Some(self.recordings_dir()),
                     record_marked: Some(self.kept_recordings.clone()),
                     audio: self.local_audio,
+                    audio_device: self.settings.audio_output(),
                     ..Config::default()
                 };
                 let clients = self.clients.clone();

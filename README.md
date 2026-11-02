@@ -220,6 +220,7 @@ scanner-ui
 | Receiver gain | 0 to 21: the Airspy's linearity gain, or that far up a HackRF's or an RTL-SDR tuner's range. |
 | Frequency correction | For RTL-SDR dongles and HackRFs whose crystal is off, in parts per million. |
 | Bias tee | Powers an amplifier at the antenna through the coax. Leave off unless you have one. |
+| Audio output | Where the sound plays: the system default, or one output of those connected. If the one picked is unplugged, sound moves to the default. |
 | Keep recordings | On: recordings are kept. Off: deleted when the app closes (except channels marked Rec). |
 | Theme | Colours for the app. |
 
@@ -249,6 +250,7 @@ Useful options:
 | `--record DIR` | Save every transmission as a WAV file |
 | `--record-marked DIR` | Save only channels marked Rec in the app |
 | `--no-audio` | Don't play audio |
+| `--audio-device NAME` | Play on this output instead of the default; `scanner audio-devices` lists them |
 | `--dwell SECS`, `--stay SECS` | Band-hopping timing |
 | `--hold SECS` | Stay on a channel this long after it goes quiet (default 1.5) |
 | `--db FILE` | Use a different channel database |
@@ -280,7 +282,7 @@ scanner-web --help
 | `--listen all` | Serve anything that can reach this computer, on every network it is on |
 | `--listen ADDRESS` | Serve on one of this computer's addresses only |
 | `--port N` | Port to serve on (default 1515) |
-| `--local-audio` | Also play through this computer's speakers |
+| `--local-audio` | Also play through this computer's speakers, on the output picked in the desktop app |
 | `--web-root DIR` | Where the page's files are (default: a `web` folder beside the program) |
 | `--db FILE` | Channel database to use |
 | `--access-code CODE` | Ask for this code before showing or playing anything |
@@ -587,7 +589,7 @@ Things to know:
 | `crates/drivers/airspy` | Airspy driver, through `libairspy`: the system's, loaded at run time, or a compiled-in copy on Android |
 | `crates/drivers/rtlsdr` | RTL-SDR driver, through the system's `librtlsdr`, loaded at run time |
 | `crates/drivers/hackrf` | HackRF driver, through `libhackrf`: the system's, loaded at run time, or on Windows compiled in from the HackRF project's source, a git submodule |
-| `crates/drivers/audio` | Audio output: `aplay` on Linux, the native audio API elsewhere |
+| `crates/drivers/audio` | Audio output: `aplay` and `pactl` on Linux, the native audio API elsewhere |
 | `mobile` | The Android app (separate cargo project) |
 | `installer` | The Windows installer's Inno Setup script |
 | `icons` | The logo and icons; `scripts/make-icons` redraws them |

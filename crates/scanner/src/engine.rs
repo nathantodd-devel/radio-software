@@ -155,6 +155,8 @@ pub struct Config {
     pub source: Source,
     /// Play audio through the speakers.
     pub audio: bool,
+    /// Which output to play it on; `None` for the system's default.
+    pub audio_device: Option<String>,
     pub scan: ScanMode,
     /// Seconds to listen to a quiet band before moving to the next; when
     /// scanning one channel at a time, how long to wait on a signal for the
@@ -177,6 +179,7 @@ impl Default for Config {
             rate: None,
             source: Source::Auto,
             audio: true,
+            audio_device: None,
             scan: ScanMode::HopBands,
             dwell_secs: 1.5,
             max_stay_secs: 20.0,
@@ -1032,7 +1035,7 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
         fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
     let mut speaker = if cfg.audio {
-        Some(audio::Output::open(AUDIO_RATE)?)
+        Some(audio::Output::open(AUDIO_RATE, cfg.audio_device.as_deref())?)
     } else {
         None
     };

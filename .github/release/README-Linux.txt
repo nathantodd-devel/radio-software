@@ -14,6 +14,8 @@ library for whichever you have, and aplay for audio:
   librtlsdr    Fedora and Debian/Ubuntu: the rtl-sdr package
   libhackrf    Fedora: the hackrf package; Debian/Ubuntu: libhackrf0
   aplay        Fedora and Debian/Ubuntu: the alsa-utils package
+  pactl        Fedora and Debian/Ubuntu: the pulseaudio-utils package; only
+               needed to pick an audio output other than the default
 
 Those packages also install the udev rules that let you use the receiver
 without being root. If an RTL-SDR won't open, the kernel's DVB-T driver may

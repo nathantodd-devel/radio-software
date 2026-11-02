@@ -5859,6 +5859,7 @@ dependencies = [
 name = "scanner-ui"
 version = "1.0.1"
 dependencies = [
+ "audio",
  "chrono",
  "gpui",
  "scanner",
