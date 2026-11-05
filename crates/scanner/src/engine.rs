@@ -1375,7 +1375,9 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
         }
         let now_playing = current.filter(|&c| open[c]);
 
-        let volume = controls.volume();
+        let (volume, normalize) = (controls.volume(), controls.normalize());
+        // Normalised audio has the volume applied already.
+        let scale = if normalize { 1.0 } else { volume };
         for c in 0..rows {
             if open[c] && open_blocks[c] == 0 {
                 let e = &plan.entries[c];
@@ -1412,11 +1414,11 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
             }
             if open[c] {
                 open_blocks[c] += 1;
-                if controls.normalize() {
-                    normalizers[c].process(&mut audio[c]);
+                if normalize {
+                    normalizers[c].process(&mut audio[c], volume);
                 }
                 if let Some((w, _)) = &mut recorders[c] {
-                    to_pcm(&audio[c], volume, &mut pcm);
+                    to_pcm(&audio[c], scale, &mut pcm);
                     w.write(&pcm);
                 }
             } else if open_blocks[c] > 0 {
@@ -1459,7 +1461,7 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
         // live audio.
         let sounding = !controls.muted() && (replay.is_some() || playing.is_some());
         if let (Some(c), None) = (playing, &replay) {
-            to_pcm(&audio[c], volume, &mut pcm);
+            to_pcm(&audio[c], scale, &mut pcm);
         }
         if sounding {
             on_event(Event::Audio(&pcm));
