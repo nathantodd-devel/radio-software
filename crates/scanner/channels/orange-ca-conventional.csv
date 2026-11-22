@@ -1,0 +1,92 @@
+# Orange County, California: conventional analog FM.
+# Source: RadioReference county database (ctid 212), read 2026-11-22.
+# freq_mhz, ctcss_hz, width (w = 5 kHz deviation, n = 2.5 kHz), tag, description
+# Earlier lines win when several channels are active at once.
+#
+# The tone column is a CTCSS tone in Hz or a DCS code (D311).
+# Sheriff, OCFA and city police and fire dispatch are on the CCCS P25 trunked
+# system: see orange-ca-cccs.csv. Left out: DMR, telemetry, MDT data and paging.
+
+# Non Trunked / Supplementary / Talkarounds
+151.0850, 136.5, n,   OC ACC V,       OC Access VHF / Advisory Broadcast / Patch Capable
+460.5250, 103.5, n,   OC ACC U,       OC Access UHF
+860.8625, 103.5, n,   OC ACC 800,     OC Access 800
+46.5600,  -,     w,   OA-1,           OC Operational Area Coordination Net 1
+37.1400,  100.0, w,   OA-2,           OC Operational Area Coordination Net 2
+45.3000,  146.2, w,   Air Net,        AirCall backup
+39.8400,  88.5,  w,   WEROC EAS,      Water Emergency Response Org of OC / Emergency Alert System (EAS)
+151.0100, 123.0, n,   FIRE OC ACC,    OC Fire Tactical / Outside Agency Access
+154.8150, 192.8, n,   FIRE OC AG,     OC Fire Air-to-Ground
+460.5250, 103.5, n,   SHERIFF SAR,    Sheriff - Search and Rescue - 800Mhz patch capable
+
+# CCCS Zone 10 - TAN
+853.9500, D311,  w,   TAN-TA,         10A - Tan (Talkaround)
+853.9500, D311,  w,   TAN-TR,         10B - Tan (Transportable Repeater)
+858.8625, D365,  w,   TAN-US-TA,      10C - Tan US (Talkaround)
+858.8625, D365,  w,   TAN-US-TR,      10D - Tan US (Transportable Repeater)
+853.5375, D306,  w,   TAN-CAT-TA,     10E - Tan Catalina (Blackjack Pk) (Talkaround)
+853.5375, D306,  w,   TAN-CAT-RP,     10F - Tan Catalina (Blackjack Pk) (Repeater)
+853.5375, D364,  w,   TAN-SIL-TA,     10G - Tan Silverado Canyon (Talkaround)
+853.5375, D364,  w,   TAN-SIL-RP,     10H - Tan Silverado Canyon (Repeater)
+854.9875, D331,  w,   TAN-MOR-TA,     Tan Moorhead (Laguna) (Talkaround)
+854.9875, D331,  w,   TAN-MOR-RP,     Tan Moorhead (Laguna) (Repeater)
+
+# CCCS Zone 11 - AIRTAC
+855.2125, 103.5, w,   AIRTAC-TA,      11A - AirTac Talkaround (Air to Ground)
+855.2125, 103.5, w,   AIRTAC-RP,      11B - AirTac Repeater
+
+# CCCS Zone 14 - Conventional
+851.2375, D411,  n,   14-G,           Countywide primary TA
+851.7875, D412,  n,   14-H,           Metronet North Pri TA
+852.7875, D413,  n,   14-I,           Metronet Central Pri TA
+852.7875, D423,  n,   14-J,           Countywide common
+853.8750, D431,  n,   14-K,           Countywide Common
+853.8750, D431,  n,   14-L,           Transportable Repeater
+
+# Hospital  Emergency Administrative Radio (H.E.A.R.)
+155.2800, 192.8, n,   OC HEAR,        Paramedic Base Hospital Net
+462.9500, 103.5, n,   OC Med-09,      UHF Med Calling Channel
+
+# Sanitation District
+453.3750, 131.8, n,   OCSD,           Plant Operations
+453.8875, 131.8, n,   OCSD M,         Direct Talkaround
+
+# Waste and Recycling
+463.3375, -,     n,   DESHECHA LF,    Prima Deshecha Landfill
+
+# Costa Mesa
+857.2625, 103.5, w,   COS SIL-RP,     Costa Mesa - Silver RP
+
+# Fullerton
+470.1250, 110.9, n,   FUL EOC,        Emergency Operations Center
+
+# Irvine
+446.7200, 88.5,  w,   IDEC Sierra,    Irvine Disaster Emergency Communications - Secondary - "Sierra"
+449.5800, 88.5,  w,   IDEC Tango,     Irvine Disaster Emergency Communications - Primary "Tango"
+453.5625, 67.0,  n,   IRV PD Special, Irvine Police - Reserves / Special Events
+
+# Newport Beach
+460.2625, 218.1, n,   NPB UTILITIES,  Utilities Department
+
+# Santa Ana
+144.3300, -,     w,   SART 2M Sim,    Santa Ana Response Team - Simplex
+447.5400, 100.0, w,   SART Repeat,    Santa Ana Response Team Repeater
+
+# Seal Beach
+155.8050, 131.8, n,   SLB PW,         Public Works
+
+# Freeway Service Patrol
+39.8600,  173.8, w,   NC FSP,         North County FSP
+39.5200,  173.8, w,   SC FSP,         South County FSP
+
+# ACCESS Shared Ride Service
+508.4625, 162.2, w,   OCTA Access A,  Dial-a-Ride
+508.6125, 103.5, w,   OCTA Access B,  Dial-a-Ride
+508.6625, 103.5, w,   OCTA Access C,  Dial-a-Ride
+508.7125, 162.2, w,   OCTA Access D,  Dial-a-Ride
+
+# Inter-Canyon League
+462.5500, 114.8, n,   CANYON A,       Canyon Watch
+462.5750, 100.0, n,   CANYON SILV,    Canyon Watch - Silverado/Franklin Repeater
+462.5750, 107.2, n,   CANYON MODJ,    Canyon Watch - Modjeska/Carter Repeater
+462.5750, 123.0, n,   CANYON B,       Canyon Watch

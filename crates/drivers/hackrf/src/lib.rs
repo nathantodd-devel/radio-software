@@ -31,9 +31,13 @@ const INSTALL_HINT: &str = "install the hackrf package (libhackrf0 on Debian and
 
 /// Blocks of samples that may wait for the reader before any are dropped.
 const QUEUE_BLOCKS: usize = 64;
-/// Sample rates worth offering, fastest first. The device goes to 20 MSPS,
-/// but that is more than one processor core demodulates in real time.
-const SAMPLE_RATES: [u32; 4] = [10_000_000, 8_000_000, 5_000_000, 2_500_000];
+/// Sample rates worth offering, fastest first. 20 MSPS is the device's
+/// most, and fills USB 2.0: through a hub, a virtual machine or a weak USB
+/// controller samples get dropped. With more of the band reaching its
+/// 8-bit converter, strong signals also overload it sooner.
+const SAMPLE_RATES: [u32; 5] = [20_000_000, 10_000_000, 8_000_000, 5_000_000, 2_500_000];
+/// The rate used until another is chosen: one every setup copes with.
+const DEFAULT_RATE: u32 = 10_000_000;
 /// Fraction of the sample rate inside the baseband filter, which is set to
 /// match: the device's own choice of filters comes in steps, the nearest
 /// under three quarters of the rate being its custom.
@@ -373,6 +377,10 @@ impl receiver::Receiver for HackRf {
 
     fn sample_rates(&self) -> receiver::Result<Vec<u32>> {
         Ok(HackRf::sample_rates(self))
+    }
+
+    fn default_rate(&self) -> receiver::Result<u32> {
+        Ok(DEFAULT_RATE)
     }
 
     fn usable_bandwidth(&self) -> f64 {

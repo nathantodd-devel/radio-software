@@ -131,11 +131,9 @@ impl Hub {
     }
 
     /// The sample rate to run at: the chosen one if the receiver offers it,
-    /// otherwise its fastest.
+    /// otherwise its default.
     fn rate(&self) -> Option<u32> {
-        let rates = &self.radio.as_ref()?.rates;
-        let chosen = rates.iter().find(|&&rate| rate == self.settings.sample_rate);
-        chosen.or(rates.iter().max()).copied()
+        Some(self.radio.as_ref()?.rate_or_default(self.settings.sample_rate))
     }
 
     fn usable_span_hz(&self) -> Option<f64> {

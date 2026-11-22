@@ -77,6 +77,14 @@ pub trait Receiver: Send {
     /// rates that are whole multiples of 1000.
     fn sample_rates(&self) -> Result<Vec<u32>>;
 
+    /// The rate to use when none has been chosen: one of
+    /// [`sample_rates`](Self::sample_rates). The fastest, unless the device
+    /// offers rates that only some computers or antennas cope with.
+    fn default_rate(&self) -> Result<u32> {
+        let rates = self.sample_rates()?;
+        Ok(rates.iter().copied().max().unwrap_or_default())
+    }
+
     /// The fraction of the sample rate, centred on the tuned frequency,
     /// that the device's filters pass cleanly: channels are only placed
     /// within it.

@@ -1,0 +1,131 @@
+# Orange County, California: P25 conventional talkarounds (800 and 700 MHz).
+# Source: RadioReference county database (ctid 212), read 2026-11-22.
+# freq_mhz, nac, p25, tag, description
+# Earlier lines win when several channels are active at once.
+#
+# Most of these are simplex talkarounds that carry little traffic. Several
+# share a frequency and differ only by NAC. Left out: the encrypted ones
+# (Sheriff, SWAT, DA, city police Green TAs).
+
+# Non Trunked / Supplementary / Talkarounds
+852.7375, 226,   p25, EOC SIL-TA,   OC Emergency Operations Center - Silver TA
+852.7625, 228,   p25, HLTH SIL-TA,  OC Health Care Agency - Silver TA
+852.7625, 243,   p25, OCTA SIL-TA,  OC Transportation Authority - Silver TA
+852.7625, 244,   p25, AC SIL-TA,    OC Animal Control - Silver TA
+852.7625, 245,   p25, OCPW SIL-TA,  OC Public Works - Silver TA
+852.7625, 247,   p25, PARK SIL-TA,  OC Parks - Silver TA
+852.7625, 251,   p25, COMM SIL-TA,  Communications - Silver TA
+852.7625, 261,   p25, IWM SIL-TA,   Integrated Waste Management - Silver TA
+852.7625, 271,   p25, SSA SIL-TA,   OC Social Services Agency - Silver TA
+853.2875, 263,   p25, JWA SIL-TA,   John Wayne Airport - Silver TA
+853.4875, 281,   p25, PW NORTH-TA,  OC Public Works North - TA
+853.4875, 282,   p25, PW CENTRL-TA, OC Public Works Central - TA
+853.4875, 283,   p25, PW SOUTH-TA,  OC Public Works South - TA
+852.2625, 351,   p25, AQUA-TA,      OC Lifeguard - Aqua TA
+853.5500, 570,   p25, PINOS RP,     Probation - Los Pinos Probation Camp - RP
+853.7625, 503,   p25, GREEN-TA,     Probation - Green TA
+853.7625, 506,   p25, PINOS TA,     Probation - Los Pinos Probation Camp - TA
+853.7625, 516,   p25, YGC TA,       Probation - Youth Guidance Center - TA
+853.7625, 532,   p25, JOPLIN TA,    Probation - Joplin Youth Center - TA
+853.7625, 546,   p25, JUVI TA,      Probation - Juvenile Hall - TA
+853.7625, 565,   p25, ANNEX TA,     Probation - Annex - TA (Juvenile Hall)
+773.6313, 628,   p25, 7OC1,         OC 700Mhz INTEROP
+773.6437, 704,   p25, 7OC2,         OC 700Mhz INTEROP
+773.6562, 834,   p25, 7OC3,         OC 700Mhz INTEROP
+
+# Aliso Viejo
+851.7375, 180,   p25, SIL-TA,       Aliso Viejo - Silver TA
+
+# Anaheim
+851.2625, 156,   p25, ANA SIL-TA,   Anaheim - Silver TA
+
+# Brea
+852.2375, 115,   p25, BRE SIL-TA,   Brea - Silver TA
+
+# Buena Park
+852.2375, 134,   p25, BPK SIL-TA,   Buena Park - Silver TA
+
+# Costa Mesa
+852.7375, 047,   p25, COS SIL-TA,   Costa Mesa - Silver TA
+
+# Cypress
+851.2875, 143,   p25, CYP SIL-TA,   Cypress - Silver TA
+
+# Dana Point
+851.2875, 073,   p25, DAP SIL-TA,   Dana Point - Silver TA
+
+# Fountain Valley
+851.2875, 043,   p25, FVY SIL-TA,   Fountain Valley - Silver TA
+
+# Fullerton
+851.7375, 116,   p25, FUL SIL-TA,   Fullerton - Silver TA
+
+# Garden Grove
+851.7625, 172,   p25, GGV SIL-TA,   Garden Grove - Silver TA
+
+# Huntington Beach
+853.2625, 032,   p25, HTB SIL-TA,   Huntington Beach - Silver TA
+856.2625, 142,   p25, HTB EOC,      Emergency Operation Center
+
+# Irvine
+851.2625, 051,   p25, IRV SIL-TA,   Irvine - Silver TA
+
+# La Habra
+853.2625, 114,   p25, LHB SIL-TA,   La Habra - Silver TA
+
+# La Palma
+853.7375, 132,   p25, LAP SIL-TA,   La Palma - Silver TA
+
+# Laguna Beach
+851.7375, 071,   p25, LAB SIL-TA,   Laguna Beach - Silver TA
+
+# Laguna Hills
+851.7625, 152,   p25, LHS SIL-TA,   Laguna Hills - Silver TA
+
+# Laguna Niguel
+852.2375, 174,   p25, LAN SIL-TA,   Laguna Niguel - Silver TA
+
+# Los Alamitos
+851.7375, 165,   p25, LAL SIL-TA,   Los Alamitos - Silver TA
+
+# Mission Viejo
+853.7375, 065,   p25, MVO SIL-TA,   Mission Viejo - Silver TA
+
+# Newport Beach
+851.7625, 054,   p25, NPB SIL-TA,   Newport Beach - Silver TA
+
+# Orange
+853.7375, 162,   p25, ORG SIL-TA,   Orange - Silver TA
+
+# Placentia
+851.7625, 125,   p25, PLA SIL-TA,   Placentia - Silver TA
+
+# Rancho Santa Margarita
+851.7375, 180,   p25, RSM SIL-TA,   Rancho Santa Margarita - Silver TA
+
+# San Clemente
+851.2625, 072,   p25, SCL SIL-TA,   San Clemente - Silver TA
+
+# San Juan Capistrano
+853.2625, 703,   p25, SJC SIL-TA,   San Juan Capistrano - Silver TA
+
+# Santa Ana
+852.2375, 026,   p25, STA SIL-TA,   Santa Ana - Silver TA
+
+# Seal Beach
+852.2375, 023,   p25, SLB SIL-TA,   Seal Beach - Silver TA
+
+# Stanton
+853.2625, 155,   p25, STN SIL-TA,   Stanton - Silver TA
+
+# Tustin
+853.2625, 031,   p25, TST SIL-TA,   Tustin - Silver TA
+
+# Villa Park
+851.7375, 712,   p25, SIL-TA,       Villa Park - Silver TA
+
+# Westminster
+853.7375, 025,   p25, WST SIL-TA,   Westminster - Silver TA
+
+# Yorba Linda
+851.2875, 131,   p25, YBL SIL-TA,   Yorba Linda - Silver TA

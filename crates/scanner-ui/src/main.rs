@@ -275,6 +275,16 @@ impl ScannerView {
         }
     }
 
+    /// Look for a receiver again, after one is plugged in, and scan with it
+    /// if one turns up.
+    fn look_again(&mut self) {
+        self.error = None;
+        self.find_receiver();
+        if self.radio.is_some() {
+            self.start();
+        }
+    }
+
     /// Scan the selected systems.
     fn start(&mut self) {
         // Only one scan can hold the receiver: stop the old one first.
@@ -312,11 +322,9 @@ impl ScannerView {
     }
 
     /// The sample rate to run at: the chosen one if the receiver offers it,
-    /// otherwise its fastest. `None` if no receiver was found.
+    /// otherwise its default. `None` if no receiver was found.
     fn rate(&self) -> Option<u32> {
-        let rates = &self.radio.as_ref()?.rates;
-        let chosen = rates.iter().find(|&&rate| rate == self.settings.sample_rate);
-        chosen.or(rates.iter().max()).copied()
+        Some(self.radio.as_ref()?.rate_or_default(self.settings.sample_rate))
     }
 
     /// Widest spread of frequencies, in Hz, the receiver covers in one
@@ -1424,7 +1432,7 @@ impl ScannerView {
                 "Receiver",
                 match &self.radio {
                     Some(radio) => format!("Using: {}.", radio.name),
-                    None => "None found. Plug one in, then choose its kind here to look again.".to_string(),
+                    None => "None found. Plug one in, then choose its kind or press Look again.".to_string(),
                 },
                 div()
                     .flex()
@@ -1438,16 +1446,22 @@ impl ScannerView {
                                 button(saved_as, title, saved_as == device, theme().accent).on_click(cx.listener(
                                     move |this, _, _, cx| {
                                         this.update_settings(false, |s| s.device = saved_as.to_string());
-                                        this.error = None;
-                                        this.find_receiver();
-                                        if this.radio.is_some() {
-                                            this.start();
-                                        }
+                                        this.look_again();
                                         cx.notify();
                                     },
                                 ))
                             }),
                     )
+                    .when(self.radio.is_none(), |kinds| {
+                        kinds.child(
+                            button("look-again", "Look again", false, theme().accent).on_click(cx.listener(
+                                |this, _, _, cx| {
+                                    this.look_again();
+                                    cx.notify();
+                                },
+                            )),
+                        )
+                    })
                     .into_any_element(),
             ))
             .child(row(
@@ -1679,6 +1693,18 @@ impl Render for ScannerView {
                         .child("Pick a system on the left to scan it."),
                 };
                 main.child(message.p_4())
+                    .when(self.radio.is_none(), |main| {
+                        main.child(
+                            div().px_4().pb_2().flex().child(
+                                button("look-again-main", "Look for a receiver again", false, theme().accent)
+                                    .py_1()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.look_again();
+                                        cx.notify();
+                                    })),
+                            ),
+                        )
+                    })
                     .when_some(self.notice.clone(), |main, notice| {
                         main.child(div().px_4().text_sm().text_color(rgb(theme().muted)).child(notice))
                     })

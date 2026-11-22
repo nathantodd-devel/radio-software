@@ -1,0 +1,380 @@
+# Orange County Countywide Coordinated Communications System (CCCS),
+# P25 Phase 1, 800 and 700 MHz. Sysid 45C, WACN BEE00.
+# Source: RadioReference trunked system database (sid 7548), read 2026-11-22.
+#
+# p25, freq_mhz           a frequency used by any of the system's sites
+# tg, id, tag, description  a talkgroup; calls to others show as "Other"
+# Earlier talkgroups win when several are active at once.
+#
+# 178 of the system's 406 talkgroups are listed. The rest are encrypted,
+# which includes all Sheriff, OCFA, MetroNet fire and almost all city police
+# dispatch.
+
+# Site 021, Countywide (NAC 451)
+p25, 856.7125
+p25, 857.4625
+p25, 860.2125
+p25, 860.4625
+p25, 855.7125
+p25, 856.2125
+p25, 856.4625
+p25, 856.9625
+p25, 857.2125
+p25, 857.7125
+p25, 857.9625
+p25, 858.2125
+p25, 858.4625
+p25, 858.7125
+p25, 858.9625
+p25, 859.2125
+p25, 859.4625
+p25, 859.5625
+p25, 859.7125
+p25, 859.9625
+p25, 860.7125
+p25, 860.9625
+
+# Site 022, South (NAC 452)
+p25, 853.375
+p25, 853.625
+p25, 853.675
+p25, 853.925
+p25, 851.125
+p25, 851.175
+p25, 851.375
+p25, 851.625
+p25, 851.875
+p25, 852.125
+p25, 852.375
+p25, 852.625
+p25, 852.825
+p25, 852.875
+p25, 853.125
+p25, 853.900
+
+# Site 023, North (NAC 450)
+p25, 853.150
+p25, 853.175
+p25, 853.400
+p25, 853.650
+p25, 851.150
+p25, 851.400
+p25, 851.650
+p25, 851.675
+p25, 851.900
+p25, 852.150
+p25, 852.175
+p25, 852.400
+p25, 852.650
+p25, 852.675
+p25, 852.900
+
+# Site 024, Northwest (NAC 451)
+p25, 852.325
+p25, 852.850
+p25, 853.325
+p25, 853.700
+p25, 851.325
+p25, 851.700
+p25, 851.850
+p25, 852.700
+
+# Site 025, Southwest (NAC 450)
+p25, 852.350
+p25, 853.200
+p25, 853.350
+p25, 853.825
+p25, 851.200
+p25, 851.350
+p25, 851.825
+p25, 852.200
+
+# Site 026, Silverado ASR
+p25, 772.54375
+p25, 773.13125
+p25, 771.54375
+
+# Site 027, Laguna (NAC 457)
+p25, 851.2125
+p25, 852.2125
+p25, 853.2125
+p25, 853.9625
+
+# Site 028, Moorhead ASR (NAC 458)
+# (every frequency is shared with a site above)
+
+# Site 029, Carbon Canyon ASR (NAC 459)
+p25, 853.3125
+
+# Site 030, Loma Ridge ASR (NAC 45A)
+p25, 773.40625
+p25, 774.15625
+p25, 771.88125
+p25, 772.88125
+
+# Site 031, Laguna Canyon ASR (NAC 45C)
+p25, 853.7125
+p25, 851.7125
+p25, 852.7125
+
+# Sheriff - Transit
+tg, 2580, SO Transit 1,  Transit Primary
+tg, 2584, OCSD TRANS N,  OCSD Transit North Cell
+
+# Aliso Viejo
+tg, 2610, AVJ PW SIL1,   Public Works - Silver 1
+
+# Anaheim
+tg, 21,   ANA A-TAC,     1A Anaheim Ops
+tg, 23,   ANA B-TAC,     1B Anaheim Ops
+tg, 2400, ANA PW SIL1,   Anaheim Public Works - Silver 1
+tg, 2402, ANA PW SIL2,   Anaheim Public Works - Silver 2
+tg, 2404, ANA PW SIL3,   Anaheim Code Enforcement - Silver 3
+tg, 2406, ANA PW SIL4,   Anaheim Park Rangers - Silver 4
+tg, 2408, ANA PW SIL5,   Anaheim Public Works - Silver 5
+tg, 2410, ANA PW SIL6,   Anaheim Convention Center Security - Silver 6
+tg, 2412, ANA PW SIL7,   Anaheim Power "Station A" - Silver 7
+tg, 2414, ANA PW SIL8,   Anaheim Water "Station C" - Silver 8
+tg, 2416, ANA PW SIL9,   Anaheim Public Works - Silver 9
+tg, 2418, ANA PW SIL10,  Anaheim Public Works - Silver 10
+tg, 2420, ANA PW SIL11,  Anaheim Water "Station C" - Silver 11
+tg, 2422, ANA PW SIL12,  Anaheim Public Works - Silver 12
+
+# Brea
+tg, 2424, BRE PW SIL1,   Public Works - Silver 1
+
+# Buena Park
+tg, 2426, BPK PW SIL1,   Buena Park Public Works - Silver 1
+
+# Costa Mesa
+tg, 2428, COS PW SIL1,   Public Works - Silver 1
+
+# Cypress
+tg, 2430, CYP PW SIL1,   Cypress Public Works - Silver 1
+
+# Dana Point
+tg, 2432, DAP PW SIL1,   Public Works - Silver 1
+
+# Dispatch/Coordination
+tg, 1700, DSP-DSP,       Dispatch Center Coordination
+
+# Fountain Valley
+tg, 2434, FVY PW SIL1,   Fountain Valley Public Works - Silver 1
+
+# Fullerton
+tg, 2436, FUL PW SIL1,   Public Works - Silver 1
+
+# Garden Grove
+tg, 2438, GGV PW SIL1,   Garden Grove Public Works - Silver 1
+
+# Huntington Beach
+tg, 81,   HTB A-TAC,     1A Huntington Beach Ops
+tg, 83,   HTB B-TAC,     1B Huntington Beach Ops
+tg, 2440, HTB PW SIL1,   Huntington Beach Public Works - Silver 1
+tg, 2442, HTB PW SIL2,   Huntington Beach Public Works - Silver 2
+tg, 2444, HTB PW SIL3,   Huntington Beach Public Works - Silver 3
+tg, 2950, HTB AQUA-1,    Huntington Beach Lifeguard Aqua 1
+
+# Irvine
+tg, 2446, IRV PW SIL1,   Public Works - Silver 1
+tg, 1934, IRV PW SIL2,   Public Works - Silver 2
+tg, 1936, IRV PW SIL3,   Public Works - Silver 3
+
+# La Habra
+tg, 2454, LHB PW SIL1,   Public Works - Silver 1
+
+# La Palma
+tg, 2456, LAP PW SIL1,   La Palma Public Works - Silver 1
+
+# Laguna Beach
+tg, 2448, LAB PW SIL1,   Public Works - Silver 1
+tg, 2490, LAB PW SIL 2,  Transit and Trolleys
+tg, 2952, LAB AQUA 1,    Laguna Beach Marine Safety Department
+
+# Laguna Hills
+tg, 2450, LAH PW SIL1,   Public Works - Silver 1
+
+# Laguna Niguel
+tg, 2452, LAN PW SIL1,   Public Works - Silver 1
+
+# Lake Forest
+tg, 2306, LKF PW SIL1,   Public Works - Silver 1
+
+# Los Alamitos
+tg, 2458, LOS PW SIL1,   Public Works - Silver 1
+
+# Mission Viejo
+tg, 2460, MVJ PW SIL1,   Public Works - Silver 1
+
+# Newport Beach
+tg, 2462, NPB PW SIL1,   Public Works - Silver 1
+tg, 2954, NPB AQUA-1,    Lifeguard Division - Aqua 1
+
+# Orange
+tg, 121,  ORG A-TAC,     1A Orange Ops
+tg, 123,  ORG B-TAC,     1B Orange Ops
+tg, 2464, ORG PW SIL1,   Orange Public Works - Silver 1
+
+# Placentia
+tg, 2466, PLA PW SIL1,   Public Works - Silver 1
+
+# San Clemente
+tg, 2468, SCL PW SIL1,   Park Rangers - Silver 1
+tg, 2956, SCL AQUA-1,    Marine Safety - Aqua 1
+
+# San Juan Capistrano
+tg, 2470, SJC PW SIL1,   Public Works - Silver 1
+
+# Santa Ana
+tg, 2472, STA PW SIL1,   Public Works - Silver 1
+tg, 2474, STA PW SIL2,   Public Works - Silver 2
+tg, 2476, STA PW SIL3,   Public Works - Silver 3
+
+# Seal Beach
+tg, 2478, SLB PW SIL1,   Public Works - Silver 1
+tg, 2958, SLB LG AQUA-1, Marine Safety Lifeguard Aqua 1
+
+# Stanton
+tg, 2480, STN PW SIL1,   Public Works - Silver 1
+
+# Tustin
+tg, 2482, TST PW SIL1,   Public Works - Silver 1
+
+# Villa Park
+tg, 2488, VPK PW SIL1,   Public Works - Silver 1
+
+# Westminster
+tg, 2484, WST PW SIL1,   Public Works - Silver 1
+
+# Yorba Linda
+tg, 2486, YBL PW SIL1,   Public Works - Silver 1
+
+# City Interoperability (PINK)
+tg, 321,  PINK ANA,      Anaheim
+tg, 323,  PINK BRE,      Brea
+tg, 327,  PINK COS,      Costa Mesa
+tg, 333,  PINK FVY,      Fountain Valley
+tg, 335,  PINK FUL,      Fullerton
+tg, 339,  PINK HTB,      Huntington Beach
+tg, 343,  PINK LHB,      La Habra
+tg, 347,  PINK LAB,      Laguna Beach
+tg, 353,  PINK NPB,      Newport Beach
+tg, 355,  PINK ORG,      Orange
+tg, 361,  PINK STA,      Santa Ana
+tg, 2054, PINK BPK,      Buena Park
+tg, 2058, PINK CYP,      Cypress
+tg, 2060, PINK DAP,      Dana Point
+tg, 2070, PINK IRV,      Irvine
+tg, 2074, PINK LAP,      La Palma
+tg, 2078, PINK LAH,      Laguna Hills
+tg, 2080, PINK LAN,      Laguna Niguel
+tg, 2082, PINK LOS,      Los Alamitos
+tg, 2084, PINK MVJ,      Mission Viejo
+tg, 2090, PINK PLA,      Placentia
+tg, 2092, PINK SCL,      San Clemente (Coastal Animal Services Authority (CASA)
+tg, 2094, PINK SJC,      San Juan Capistrano
+tg, 2098, PINK SLB,      Seal Beach
+tg, 2100, PINK STN,      Stanton
+tg, 2102, PINK TST,      Tustin
+tg, 2104, PINK WST,      Westminster
+tg, 2106, PINK YBL,      Yorba Linda
+tg, 2108, PINK VPK,      Villa Park
+tg, 2110, PINK AVJ,      Aliso Viejo
+tg, 2112, PINK RSM,      Rancho Santa Margarita
+
+# County Services
+tg, 2500, ACO SIL 1,     Animal Control - Silver 1
+tg, 2502, ACO SIL N,     Animal Control North Tactical
+tg, 2504, ACO SIL S,     Animal Control South Tactical
+tg, 2540, COMMS SIL1,    Communications - Silver 1
+tg, 2542, COMM SIL2,     Communications - Silver 2
+tg, 2544, COMM SIL3,     Communications - Silver 3
+tg, 2546, COMM SIL4,     Communications - Silver 4 - South Cell
+tg, 2548, COMM SIL5,     Communications - Silver 5 - Southwest Cell
+tg, 2550, COMM SIL6,     Communications - Silver 6
+tg, 2552, COMM SIL8,     Communications - Silver 8
+tg, 2554, COMM SIL9,     Communications - Silver 9
+tg, 2510, OCE SIL1,      Environmental Health
+tg, 2518, HCA SIL 1,     Health Care Agency
+tg, 2512, EMS SIL 1,     Health Care Agency.EMS 1
+tg, 2514, EMS SIL 2,     Health Care Agency/EMS 2
+tg, 2570, JWA SIL1,      John Wayne Airport - Silver 1
+tg, 2572, JWA SIL2,      John Wayne Airport - Silver 2
+tg, 2574, JWA SIL3,      John Wayne Airport - Silver 3
+tg, 2524, PRK SIL1,      Park Rangers 1
+tg, 2600, PRK SIL2,      Park Rangers 2
+tg, 2602, PRK SIL3,      Park Rangers 3
+tg, 2520, OCPW SIL1,     Public Works - Silver 1
+tg, 2522, OCPW SIL2,     Public Works - Silver 2
+tg, 2532, OCPW SIL3,     Public Works - Silver 3
+tg, 2526, OCPW SIL4,     Public Works - Silver 4
+tg, 2528, OCPW SIL5,     Public Works - Silver 5
+tg, 2530, OCPW SIL6,     Public Works - Silver 6
+tg, 1938, OTAP,          Radio Techs
+tg, 2534, ROV SIL1,      Registrar of Voters 1
+tg, 2536, ROV SIL2,      Registrar of Voters 2
+tg, 2538, ROV SIL3,      Registrar of Voters 3
+tg, 2590, SSA SIL1,      Social Services
+tg, 2560, OCWR SIL1,     Waste and Recycling
+tg, 2302, WEROC 1,       Water Emergency Response Organization of OC
+tg, 2304, WEROC 2,       Water Emergency Response Organization of OC
+
+# County Transportation Authority (OCTA)
+tg, 2836, STREET CAR,    OC Streetcar
+
+# County Water District
+tg, 2266, BLUE 1 EOW,    East Orange County Water District
+tg, 2268, BLUE 1 OCW,    Orange County Water District
+tg, 2270, BLUE 1 OSW,    Orange County Sanitation District
+tg, 2272, BLUE 1 SOW,    South Orange County Water Authority
+tg, 2274, BLUE 1 GSW,    Golden State Water
+tg, 2276, BLUE 1 SWD,    Serrano Water District
+tg, 2278, BLUE 1 YLW,    Yorba Linda Water District
+tg, 2280, BLUE 1 CMW,    Costa Mesa Sanitary District
+tg, 2282, BLUE 1 ETW,    El Toro Water District
+tg, 2284, BLUE 1 MWD,    Mesa Water District
+tg, 2286, BLUE 1 SMW,    Santa Margarita Water District
+tg, 2288, BLUE 1 TCW,    Trabuco Canyon Water District
+tg, 2290, BLUE 1 MSW,    Midway Sanitation District
+tg, 2292, BLUE 1 IVW,    Irvine Ranch Water District
+tg, 2294, BLUE 1 LBW,    Laguna Beach County Water District
+tg, 2296, BLUE 1 MNW,    Moulton Niguel Water District
+tg, 2298, BLUE 1 WRC,    Municipal Water District of OC (WEROC)
+tg, 2300, BLUE 1 SCW,    South Coast Water District
+
+# Countywide Interoperability (TAN)
+tg, 391,  TAN-CALL,      Tan Call - Countywide Calling
+tg, 393,  TAN-NORTH,     North Tactical
+tg, 395,  TAN-SOUTH,     South Tactical
+tg, 397,  TAN-1,         Countywide Tactical
+tg, 399,  TAN-2,         Countywide Tactical
+tg, 401,  TAN-3,         Countywide Tactical
+tg, 403,  TAN-4,         Countywide Tactical
+tg, 405,  TAN-5,         Countywide Tactical
+tg, 407,  TAN-6,         Countywide Tactical
+
+# EMS (Field-to-Hospital)
+tg, 453,  6L HOSP-C,     6L Hospital Contact
+tg, 1710, OCC ALT,       Paramedic Coordination Center
+tg, 1720, HOAG,          Hoag Memorial Hospital
+tg, 1730, HUNT BCH,      Huntington Beach Hospital
+tg, 1740, MISSION,       Mission Hospital Regional Medical Center
+tg, 1750, ST JUDE,       St Jude Medical Center
+tg, 1760, UCI MC,        UC Irvine Medical Center
+tg, 1770, OC GLOBAL,     OC Global Medical Center
+tg, 2308, CHOC,          Children's Hospital of Orange County
+
+# Lifeguards (AQUA)
+tg, 2960, AQUA-1,        Aqua 1 County Ocean Safety
+tg, 2800, AQUA-2,        Aqua 2 Lifeguard Common
+tg, 2802, AQUA-3,        Aqua 3 Lifeguard Common
+
+# Public Works Interoperability (BROWN)
+tg, 2250, BROWN-N,       Brown North
+tg, 2252, BROWN-S,       Brown South
+tg, 2254, BROWN-1,       Brown 1
+tg, 2256, BROWN-2,       Brown 2
+tg, 2258, BROWN-3,       Brown 3
+tg, 2260, BROWN-4,       Brown 4
+tg, 2262, BROWN-5,       Brown 5
+tg, 2264, BROWN-6,       Brown 6

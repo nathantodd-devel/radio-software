@@ -375,10 +375,18 @@ pub struct Radio {
     pub name: String,
     /// The sample rates it offers.
     pub rates: Vec<u32>,
+    /// The one of `rates` to run at when none has been chosen.
+    pub default_rate: u32,
     usable_bandwidth: f64,
 }
 
 impl Radio {
+    /// The rate to run at: `chosen` if it is offered, otherwise the
+    /// default.
+    pub fn rate_or_default(&self, chosen: u32) -> u32 {
+        if self.rates.contains(&chosen) { chosen } else { self.default_rate }
+    }
+
     /// Widest spread of frequencies, in Hz, one tuning can cover at `rate`.
     pub fn usable_span_hz(&self, rate: u32) -> f64 {
         rate as f64 * self.usable_bandwidth
@@ -390,8 +398,11 @@ impl Radio {
         if rates.is_empty() {
             return Err(format!("the {name} offers no sample rates"));
         }
+        let default_rate = device.default_rate().map_err(|e| e.to_string())?;
+        let fastest = rates.iter().copied().max().unwrap_or(DEFAULT_RATE);
         Ok(Radio {
             name,
+            default_rate: if rates.contains(&default_rate) { default_rate } else { fastest },
             rates,
             usable_bandwidth: device.usable_bandwidth(),
         })
@@ -399,15 +410,13 @@ impl Radio {
 
     /// The sample rate to run at, of those on offer: the slowest when
     /// scanning one channel at a time, otherwise the one `cfg` names if it
-    /// is offered, or the fastest.
+    /// is offered, or the receiver's default.
     fn rate(&self, cfg: &Config) -> u32 {
-        let rates = self.rates.iter().copied();
         match (cfg.scan, cfg.rate) {
-            (ScanMode::Channels, _) => rates.min(),
-            (_, Some(rate)) if self.rates.contains(&rate) => Some(rate),
-            (_, _) => rates.max(),
+            (ScanMode::Channels, _) => self.rates.iter().copied().min().unwrap_or(DEFAULT_RATE),
+            (_, Some(rate)) => self.rate_or_default(rate),
+            (_, None) => self.default_rate,
         }
-        .unwrap_or(DEFAULT_RATE)
     }
 }
 
@@ -493,6 +502,7 @@ fn find(cfg: &Config) -> Result<Vec<Found>, String> {
         let radio = Radio {
             name: "stdin".into(),
             rates: vec![rate],
+            default_rate: rate,
             usable_bandwidth: DEFAULT_USABLE_BANDWIDTH,
         };
         return Ok(vec![Found {
