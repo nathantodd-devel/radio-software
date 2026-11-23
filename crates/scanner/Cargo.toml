@@ -1,16 +1,16 @@
 [package]
 name = "scanner"
-version = "1.0.1"
+version = "1.0.3"
 edition = "2024"
 license = "AGPL-3.0-only"
 
 [dependencies]
-airspy = { path = "../drivers/airspy" , version = "1.0.1" }
-rtlsdr = { path = "../drivers/rtlsdr", version = "1.0.1" }
-hackrf = { path = "../drivers/hackrf", version = "1.0.1" }
-receiver = { path = "../drivers/receiver", version = "1.0.1" }
-audio = { path = "../drivers/audio" , version = "1.0.1" }
-radiocore = { path = "../radiocore" , version = "1.0.1" }
+airspy = { path = "../drivers/airspy" , version = "1.0.3" }
+rtlsdr = { path = "../drivers/rtlsdr", version = "1.0.3" }
+hackrf = { path = "../drivers/hackrf", version = "1.0.3" }
+receiver = { path = "../drivers/receiver", version = "1.0.3" }
+audio = { path = "../drivers/audio" , version = "1.0.3" }
+radiocore = { path = "../radiocore" , version = "1.0.3" }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 ctrlc = "3"
 rusqlite = { version = "0.40.2", features = ["bundled"] }

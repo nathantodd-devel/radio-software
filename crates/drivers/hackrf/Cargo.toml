@@ -1,6 +1,6 @@
 [package]
 name = "hackrf"
-version = "1.0.1"
+version = "1.0.3"
 edition = "2024"
 license = "AGPL-3.0-only"
 description = "Safe interface to HackRF receivers (HackRF One and its relatives) through libhackrf"
@@ -13,7 +13,7 @@ description = "Safe interface to HackRF receivers (HackRF One and its relatives)
 vendored = ["dep:libusb1-sys"]
 
 [dependencies]
-receiver = { path = "../receiver", version = "1.0.1" }
+receiver = { path = "../receiver", version = "1.0.3" }
 libusb1-sys = { version = "0.7", features = ["vendored"], optional = true }
 
 # Elsewhere the system's libhackrf is loaded at run time.

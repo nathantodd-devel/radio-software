@@ -78,7 +78,7 @@ dependencies = [
 
 [[package]]
 name = "airspy"
-version = "1.0.1"
+version = "1.0.3"
 dependencies = [
  "cc",
  "libloading",
@@ -511,7 +511,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "audio"
-version = "1.0.1"
+version = "1.0.3"
 dependencies = [
  "cpal",
 ]
@@ -3012,7 +3012,7 @@ dependencies = [
 
 [[package]]
 name = "hackrf"
-version = "1.0.1"
+version = "1.0.3"
 dependencies = [
  "cc",
  "libloading",
@@ -5185,7 +5185,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "radiocore"
-version = "1.0.1"
+version = "1.0.3"
 dependencies = [
  "blip25-vocoder",
  "libloading",
@@ -5405,7 +5405,7 @@ checksum = "03251193000f4bd3b042892be858ee50e8b3719f2b08e5833ac4353724632430"
 
 [[package]]
 name = "receiver"
-version = "1.0.1"
+version = "1.0.3"
 
 [[package]]
 name = "redox_syscall"
@@ -5594,7 +5594,7 @@ dependencies = [
 
 [[package]]
 name = "rtlsdr"
-version = "1.0.1"
+version = "1.0.3"
 dependencies = [
  "cc",
  "libloading",
@@ -5829,7 +5829,7 @@ dependencies = [
 
 [[package]]
 name = "scanner"
-version = "1.0.1"
+version = "1.0.3"
 dependencies = [
  "airspy",
  "audio",
@@ -5849,7 +5849,7 @@ dependencies = [
 
 [[package]]
 name = "scanner-proto"
-version = "1.0.1"
+version = "1.0.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -5857,7 +5857,7 @@ dependencies = [
 
 [[package]]
 name = "scanner-ui"
-version = "1.0.1"
+version = "1.0.3"
 dependencies = [
  "audio",
  "chrono",
@@ -5869,7 +5869,7 @@ dependencies = [
 
 [[package]]
 name = "scanner-web"
-version = "1.0.1"
+version = "1.0.3"
 dependencies = [
  "ctrlc",
  "ring",

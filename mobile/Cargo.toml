@@ -5,7 +5,7 @@
 
 [package]
 name = "dmps-mobile"
-version = "1.0.1"
+version = "1.0.3"
 edition = "2024"
 license = "AGPL-3.0-only"
 description = "Digital Mobile Police Scanner (DMPS) for Android"
