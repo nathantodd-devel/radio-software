@@ -245,7 +245,7 @@ impl Client {
         let active_only = self.active_only;
         let state = |c: usize| self.status.channels.get(c).cloned().unwrap_or_default();
         let shown: Vec<usize> = (0..self.channels.len())
-            .filter(|&c| !active_only || state(c).open)
+            .filter(|&c| !active_only || state(c).open || state(c).encrypted.is_some())
             .collect();
         scroller("channels")
             .child(
@@ -281,9 +281,10 @@ impl Client {
         } = state;
         let expanded = self.expanded == Some(c);
         let level = (state.level_db / METER_FULL_DB).clamp(0.0, 1.0);
+        let encrypted = state.encrypted.clone();
         let color = if playing {
             ACCENT
-        } else if open {
+        } else if open || encrypted.is_some() {
             TEXT
         } else {
             MUTED
@@ -317,7 +318,11 @@ impl Client {
                     .flex_none()
                     .size_2()
                     .rounded_full()
-                    .bg(rgb(if open { ACCENT } else { BORDER })),
+                    .bg(rgb(match (open, encrypted.is_some()) {
+                        (true, _) => ACCENT,
+                        (false, true) => HOLD,
+                        (false, false) => BORDER,
+                    })),
             )
             .child(
                 div()
@@ -337,6 +342,20 @@ impl Client {
                             .child(format!("{} · {}", channel.label, channel.description)),
                     ),
             )
+            // Traffic that can't be listened to: shown, never played.
+            .when_some(encrypted, |row, label| {
+                row.child(
+                    div()
+                        .flex_none()
+                        .px_1()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(rgb(HOLD))
+                        .text_xs()
+                        .text_color(rgb(HOLD))
+                        .child(label),
+                )
+            })
             // There is only room for when it was last heard on a wide page.
             .when(self.wide, |row| {
                 row.child(

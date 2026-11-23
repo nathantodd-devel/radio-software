@@ -347,6 +347,20 @@ fn scan(o: &Options, plan: Plan) {
                     unit.map_or(String::new(), |unit| format!("  unit {unit}"))
                 );
             }
+            Event::Encrypted {
+                channel,
+                on: true,
+                talkgroup,
+            } => {
+                let e = &plan.entries[channel];
+                println!(
+                    "{}   {:>9}  {:<17} {:<40} encrypted, not played",
+                    Local::now().format("%H:%M:%S"),
+                    talkgroup.map_or(e.id(), |tg| format!("TG {tg}")),
+                    e.tag,
+                    e.desc,
+                );
+            }
             Event::Receivers(names) if names.len() > 1 => {
                 several = true;
                 eprintln!("Scanning with {} receivers: {}.", names.len(), names.join(", "));

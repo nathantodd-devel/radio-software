@@ -378,7 +378,7 @@ impl ScannerApp {
     fn channels(&self, session: &Session, live: &Live, cx: &mut Context<Self>) -> Stateful<Div> {
         let active_only = self.active_only;
         let shown: Vec<usize> = (0..session.plan.entries.len())
-            .filter(|&c| !active_only || live.open[c])
+            .filter(|&c| !active_only || live.open[c] || live.encrypted[c].is_some())
             .collect();
         scroller("channels")
             .child(
@@ -410,11 +410,12 @@ impl ScannerApp {
         let (skipped, pinned) = (controls.skipped(c), controls.pinned() == Some(c));
         let (priority, recorded) = (controls.priority(c), controls.recorded(c));
         let (open, playing) = (live.open[c], live.playing == Some(c));
+        let encrypted = live.encrypted_label(&session.plan, c);
         let expanded = self.expanded == Some(c);
         let level = (live.levels[c] / METER_FULL_DB).clamp(0.0, 1.0);
         let color = if playing {
             ACCENT
-        } else if open {
+        } else if open || encrypted.is_some() {
             TEXT
         } else {
             MUTED
@@ -449,7 +450,11 @@ impl ScannerApp {
                         .flex_none()
                         .size_2()
                         .rounded_full()
-                        .bg(rgb(if open { ACCENT } else { BORDER })),
+                        .bg(rgb(match (open, encrypted.is_some()) {
+                            (true, _) => ACCENT,
+                            (false, true) => HOLD,
+                            (false, false) => BORDER,
+                        })),
                 )
                 .child(
                     div()
@@ -467,6 +472,20 @@ impl ScannerApp {
                             e.desc
                         ))),
                 )
+                // Traffic that can't be listened to: shown, never played.
+                .when_some(encrypted, |row, label| {
+                    row.child(
+                        div()
+                            .flex_none()
+                            .px_1()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(rgb(HOLD))
+                            .text_xs()
+                            .text_color(rgb(HOLD))
+                            .child(label),
+                    )
+                })
                 .child(
                     div().flex_none().w(px(44.)).h_1().rounded_full().bg(rgb(RAISED)).child(
                         div()

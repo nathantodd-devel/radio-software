@@ -39,6 +39,7 @@ fn main() {
                 pcm[slot as usize].extend(speech);
             }
             P25p2Frame::End { slot } => ends[slot as usize] += 1,
+            P25p2Frame::Encrypted { .. } => {}
         });
     }
     let took = started.elapsed().as_secs_f64();

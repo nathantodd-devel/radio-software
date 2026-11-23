@@ -63,6 +63,14 @@ const WORD_OFFSETS: [usize; 6] = [400, 584, 768, 952, 1136, 1320];
 /// Link control format: group voice channel user.
 const LCF_GROUP_VOICE: u8 = 0x00;
 const ALGID_CLEAR: u8 = 0x80;
+
+/// Whether an algorithm ID names a cipher: the government's (1 to 5),
+/// DES, triple DES, AES, Motorola's DES-XL, DVI-XL and DVP-XL, and ADP. Any
+/// other number than these and clear is taken to be garbled, not a sign of
+/// encryption.
+pub(crate) fn is_cipher(algid: u8) -> bool {
+    matches!(algid, 0x01..=0x05 | 0x81..=0x85 | 0x88 | 0x89 | 0x9f | 0xa0 | 0xa1 | 0xaa)
+}
 /// Voice frames held back while waiting to learn whether a call is
 /// encrypted and which talkgroup it is for.
 const MAX_PENDING_FRAMES: usize = 3;
@@ -79,6 +87,13 @@ pub enum P25Frame {
         source: Option<u32>,
         pcm: Vec<i16>,
     },
+    /// 180 ms of an encrypted call, which isn't decoded: who it is for and
+    /// from, as far as is known.
+    Encrypted {
+        nac: u16,
+        talkgroup: Option<u16>,
+        source: Option<u32>,
+    },
     /// The transmission ended.
     End,
     /// This is a control channel, and it says a call for `talkgroup` is on
@@ -91,6 +106,8 @@ pub enum P25Frame {
         /// For a Phase 2 call, which of the frequency's two time slots it
         /// is in; see [`crate::P25p2Channel`].
         slot: Option<u8>,
+        /// The control channel says the call is encrypted.
+        encrypted: bool,
     },
 }
 
@@ -109,6 +126,8 @@ pub struct P25Channel {
     source: Option<u32>,
     /// Whether the call is unencrypted, once a frame has said so.
     clear: Option<bool>,
+    /// It said so with a cipher's number: see [`is_cipher`].
+    cipher: bool,
     pending: Vec<i16>,
     in_call: bool,
     since_voice: usize,
@@ -147,6 +166,7 @@ impl P25Channel {
             talkgroup: None,
             source: None,
             clear: None,
+            cipher: false,
             pending: Vec::new(),
             in_call: false,
             since_voice: 0,
@@ -351,7 +371,9 @@ impl P25Channel {
             }
         } else if let Some(es) = field(12, 2) {
             // Message indicator (72 bits), then the algorithm ID.
-            self.clear = Some((es >> 4) as u8 == ALGID_CLEAR);
+            let algid = (es >> 4) as u8;
+            self.clear = Some(algid == ALGID_CLEAR);
+            self.cipher = is_cipher(algid);
         }
 
         self.in_call = true;
@@ -359,6 +381,13 @@ impl P25Channel {
         self.since_control = None;
         if self.clear == Some(false) {
             self.pending.clear();
+            if self.cipher {
+                sink(P25Frame::Encrypted {
+                    nac: self.nac,
+                    talkgroup: self.talkgroup,
+                    source: self.source,
+                });
+            }
             return;
         }
         for at in IMBE_OFFSETS {
@@ -400,6 +429,7 @@ impl P25Channel {
                         talkgroup,
                         channel,
                         source,
+                        encrypted,
                     } => {
                         // Until the band's numbering has been heard, the
                         // channel number says nothing.
@@ -410,6 +440,7 @@ impl P25Channel {
                                 freq_hz: band.frequency(number),
                                 source,
                                 slot: (band.slots > 1).then(|| (number % band.slots) as u8),
+                                encrypted,
                             });
                         }
                     }
@@ -430,6 +461,7 @@ impl P25Channel {
         self.talkgroup = None;
         self.source = None;
         self.clear = None;
+        self.cipher = false;
         self.pending.clear();
         self.vocoder.reset();
     }
@@ -566,9 +598,11 @@ mod tests {
                     freq_hz,
                     source,
                     slot,
+                    encrypted,
                 } = frame
                 {
                     assert_eq!(slot, None);
+                    assert!(!encrypted);
                     grants.push((talkgroup, freq_hz, source));
                 }
             });

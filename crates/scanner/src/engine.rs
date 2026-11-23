@@ -55,6 +55,10 @@ const CHANNEL_OFFSET_HZ: f64 = 300_000.0;
 /// How near a frequency a control channel names must be to one in the plan
 /// to be taken as that one.
 const GRANT_MATCH_HZ: f64 = 1_000.0;
+/// How long a channel stays marked as carrying encrypted traffic after the
+/// last sign of it: speech comes every 180 ms, the control channel's
+/// reminders that a call is going about once a second.
+const ENCRYPTED_HOLD_SECS: f32 = 1.5;
 
 /// Where the samples come from.
 #[derive(Clone)]
@@ -335,6 +339,14 @@ pub enum Event<'a> {
         unit: Option<u32>,
         recording: Option<PathBuf>,
     },
+    /// An encrypted call started (`on`) or ended on a channel. It isn't
+    /// decoded, played or recorded: this only says it is there, and for
+    /// which talkgroup when that is known.
+    Encrypted {
+        channel: usize,
+        on: bool,
+        talkgroup: Option<u16>,
+    },
     /// The channel on the speaker changed.
     Playing(Option<usize>),
     /// Carrier level over the noise floor for every channel, in dB.
@@ -384,7 +396,11 @@ impl Radio {
     /// The rate to run at: `chosen` if it is offered, otherwise the
     /// default.
     pub fn rate_or_default(&self, chosen: u32) -> u32 {
-        if self.rates.contains(&chosen) { chosen } else { self.default_rate }
+        if self.rates.contains(&chosen) {
+            chosen
+        } else {
+            self.default_rate
+        }
     }
 
     /// Widest spread of frequencies, in Hz, one tuning can cover at `rate`.
@@ -402,7 +418,11 @@ impl Radio {
         let fastest = rates.iter().copied().max().unwrap_or(DEFAULT_RATE);
         Ok(Radio {
             name,
-            default_rate: if rates.contains(&default_rate) { default_rate } else { fastest },
+            default_rate: if rates.contains(&default_rate) {
+                default_rate
+            } else {
+                fastest
+            },
             rates,
             usable_bandwidth: device.usable_bandwidth(),
         })
@@ -1072,6 +1092,7 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
     let audio_len = block_len / 3;
     let block_secs = block_len as f32 / CHANNEL_RATE;
     let hold_blocks = (cfg.hold_secs / block_secs) as u32;
+    let encrypted_hold_blocks = (ENCRYPTED_HOLD_SECS / block_secs) as u32;
     let dwell_blocks = (cfg.dwell_secs / block_secs) as u32;
     let max_stay_blocks = (cfg.max_stay_secs / block_secs) as u32;
     let check_blocks = (CHANNEL_CHECK_SECS / block_secs) as u32;
@@ -1083,6 +1104,12 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
     let mut row_rx: Vec<Option<(usize, usize, usize)>> = vec![None; rows];
     // The radio heard on each open P25 entry, once it has said who it is.
     let mut row_unit: Vec<Option<u32>> = vec![None; rows];
+    // Entries carrying encrypted traffic: blocks left before they are taken
+    // to have gone quiet, and the talkgroup, if known. `encrypted_shown` is
+    // what has been reported.
+    let mut encrypted_left = vec![0u32; rows];
+    let mut encrypted_tg: Vec<Option<u16>> = vec![None; rows];
+    let mut encrypted_shown = vec![false; rows];
     let mut recorders: Vec<Option<(wav::Writer, PathBuf)>> = (0..rows).map(|_| None).collect();
     // Each channel keeps its own, so it is at the right level as soon as it
     // is heard again.
@@ -1125,6 +1152,8 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
         /// site the control channel says it is (if it has yet).
         slot: Option<u8>,
         identity: Option<(u32, u16, u16)>,
+        /// The control channel says the call is encrypted.
+        encrypted: bool,
     }
     let mut grants: Vec<Grant> = Vec::new();
 
@@ -1195,6 +1224,17 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
                                 call.queue(&pcm);
                             }
                         }
+                        P25Frame::Encrypted { nac, talkgroup, .. } => {
+                            let row = match rx.fixed {
+                                Some((row, wanted)) => wanted.is_none_or(|w| w == nac).then_some(row),
+                                // Without a talkgroup there is no telling whose it is.
+                                None => talkgroup.and_then(|_| talkgroup_row(rx.system, talkgroup)),
+                            };
+                            if let Some(row) = row.filter(|&row| !controls.skipped(row)) {
+                                encrypted_left[row] = encrypted_hold_blocks;
+                                encrypted_tg[row] = talkgroup;
+                            }
+                        }
                         P25Frame::End => rx.calls[0].ended = true,
                         // A control channel saying where a call is. Only
                         // a trunked system's own is listened to.
@@ -1203,6 +1243,7 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
                             freq_hz,
                             source,
                             slot,
+                            encrypted,
                         } => {
                             if rx.fixed.is_none() {
                                 grants.push(Grant {
@@ -1212,6 +1253,7 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
                                     unit: source,
                                     slot,
                                     identity: rx.channel.identity(),
+                                    encrypted,
                                 });
                             }
                         }
@@ -1251,6 +1293,18 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
                                 call.queue(&pcm);
                             }
                         }
+                        P25p2Frame::Encrypted { slot } => {
+                            let Some(granted) = &mut rx.tdma.granted[usize::from(slot)] else {
+                                continue;
+                            };
+                            granted.age = 0;
+                            let talkgroup = Some(granted.talkgroup);
+                            if let Some(row) = talkgroup_row(rx.system, talkgroup).filter(|&row| !controls.skipped(row))
+                            {
+                                encrypted_left[row] = encrypted_hold_blocks;
+                                encrypted_tg[row] = talkgroup;
+                            }
+                        }
                         P25p2Frame::End { slot } => rx.calls[1 + usize::from(slot)].ended = true,
                     }
                 }
@@ -1278,7 +1332,18 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
         // A wanted call announced on a frequency that a receiver isn't on at
         // the moment: that receiver is sent there.
         for grant in grants.drain(..) {
-            let wanted = talkgroup_row(grant.system, Some(grant.talkgroup)).is_some_and(|row| !controls.skipped(row));
+            let row = talkgroup_row(grant.system, Some(grant.talkgroup)).filter(|&row| !controls.skipped(row));
+            // An encrypted call is only marked: there is nothing to go and
+            // hear. Reminders that it is still going don't say it is
+            // encrypted, but keep it marked.
+            if let Some(row) = row
+                && (grant.encrypted || encrypted_left[row] > 0 && encrypted_tg[row] == Some(grant.talkgroup))
+            {
+                encrypted_left[row] = encrypted_hold_blocks;
+                encrypted_tg[row] = Some(grant.talkgroup);
+                continue;
+            }
+            let wanted = row.is_some();
             let place = trunked_at
                 .iter()
                 .find(|at| at.0 == grant.system && (at.1 - grant.freq_hz).abs() < GRANT_MATCH_HZ);
@@ -1443,6 +1508,19 @@ pub fn run(plan: &Plan, cfg: &Config, controls: &Controls, mut on_event: impl Fn
                     recording,
                 });
                 open_blocks[c] = 0;
+            }
+        }
+        for c in 0..rows {
+            encrypted_left[c] = encrypted_left[c].saturating_sub(1);
+            // A call in the clear on the same entry takes over from it.
+            let on = encrypted_left[c] > 0 && !open[c];
+            if on != encrypted_shown[c] {
+                encrypted_shown[c] = on;
+                on_event(Event::Encrypted {
+                    channel: c,
+                    on,
+                    talkgroup: encrypted_tg[c],
+                });
             }
         }
         if now_playing != playing {

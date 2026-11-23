@@ -88,6 +88,10 @@ pub struct ChannelState {
     pub skipped: bool,
     pub priority: bool,
     pub recorded: bool,
+    /// Encrypted traffic is on it, which isn't played: what to show for
+    /// it, "Encrypted" or "Encrypted · TG 3600".
+    #[serde(default)]
+    pub encrypted: Option<String>,
 }
 
 /// One transmission in the activity log.

@@ -87,6 +87,9 @@ pub enum Message {
         channel: u16,
         /// The radio calling, when the message says.
         source: Option<u32>,
+        /// The call is encrypted, as its service options say. Updates
+        /// about calls under way don't say, and give `false`.
+        encrypted: bool,
     },
     /// How the channels of one of the system's sixteen bands are numbered.
     Band { id: u8, band: Band },
@@ -140,6 +143,8 @@ pub fn read(data: &[u8; DATA_BITS / 8]) -> Option<Block> {
             },
         }
     };
+    // Service options: emergency, then protected (encrypted), ...
+    const PROTECTED: u8 = 0x40;
     // Only the standard's own messages: a manufacturer's use the same
     // numbers for other things.
     let messages = match (manufacturer, opcode) {
@@ -149,6 +154,7 @@ pub fn read(data: &[u8; DATA_BITS / 8]) -> Option<Block> {
                 channel: word(3),
                 talkgroup: word(5),
                 source: Some(u32::from_be_bytes([0, data[7], data[8], data[9]])).filter(|&id| id != 0),
+                encrypted: data[2] & PROTECTED != 0,
             }),
             None,
         ],
@@ -158,6 +164,7 @@ pub fn read(data: &[u8; DATA_BITS / 8]) -> Option<Block> {
                 channel: word(at),
                 talkgroup: word(at + 2),
                 source: None,
+                encrypted: false,
             };
             let second = (word(6) != word(2) || word(8) != word(4)).then_some(grant(6));
             [Some(grant(2)), second]
@@ -243,9 +250,16 @@ pub(crate) mod tests {
             Some(Message::Grant {
                 talkgroup: 865,
                 channel: 0x1234,
-                source: Some(0xabcd)
+                source: Some(0xabcd),
+                encrypted: false,
             })
         );
+        // The same grant for an encrypted call.
+        let data = block([0x80, 0x00, 0x40, 0x12, 0x34, 0x03, 0x61, 0x00, 0xab, 0xcd, 0, 0]);
+        assert!(matches!(
+            super::read(&data).unwrap().messages[0],
+            Some(Message::Grant { encrypted: true, .. })
+        ));
         // A garbled block is known by its checksum.
         let mut garbled = data;
         garbled[5] ^= 0x10;

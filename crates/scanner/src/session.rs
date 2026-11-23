@@ -64,6 +64,9 @@ pub struct Live {
     /// Carrier level over the noise floor per channel, in dB.
     pub levels: Vec<f32>,
     pub open: Vec<bool>,
+    /// Per channel: encrypted traffic is on it, which isn't played. The
+    /// inner value is its talkgroup, when known.
+    pub encrypted: Vec<Option<Option<u16>>>,
     pub calls: Vec<u32>,
     pub last_heard: Vec<Option<String>>,
     pub playing: Option<usize>,
@@ -88,6 +91,17 @@ pub struct Session {
 }
 
 impl Live {
+    /// What to show beside channel `c` while encrypted traffic is on it:
+    /// "Encrypted", or with the talkgroup where the channel stands for
+    /// several ("Encrypted · TG 3600").
+    pub fn encrypted_label(&self, plan: &Plan, c: usize) -> Option<String> {
+        let talkgroup = (*self.encrypted.get(c)?)?;
+        Some(match (&plan.entries[c].kind, talkgroup) {
+            (Kind::OtherTalkgroups { .. }, Some(tg)) => format!("Encrypted · TG {tg}"),
+            _ => "Encrypted".to_string(),
+        })
+    }
+
     /// With more than one receiver, where each is tuned, for showing:
     /// "Airspy 482.5–490.9 MHz  ·  RTL-SDR band 2 of 3, 153.8–155.9 MHz".
     pub fn tunings(&self) -> Option<String> {
@@ -175,6 +189,7 @@ impl Session {
         let live = Arc::new(Mutex::new(Live {
             levels: vec![0.0; n],
             open: vec![false; n],
+            encrypted: vec![None; n],
             calls: vec![0; n],
             last_heard: vec![None; n],
             log: history.log,
@@ -194,6 +209,9 @@ impl Session {
                     match event {
                         Event::Levels(levels) => live.levels.copy_from_slice(levels),
                         Event::Audio(_) => {}
+                        Event::Encrypted { channel, on, talkgroup } => {
+                            live.encrypted[channel] = on.then_some(talkgroup);
+                        }
                         Event::Playing(channel) => {
                             live.playing = channel;
                             // A call picked up partway through still counts as played.
@@ -306,6 +324,7 @@ impl Session {
                 let mut live = live.lock().unwrap();
                 live.playing = None;
                 live.open.fill(false);
+                live.encrypted.fill(None);
                 live.error = Some(result.err().unwrap_or_else(|| "Receiver stopped.".into()));
             }
         });

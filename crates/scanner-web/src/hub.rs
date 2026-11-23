@@ -305,6 +305,7 @@ impl Hub {
                 .map(|c| ChannelState {
                     level_db: live.levels[c],
                     open: live.open[c],
+                    encrypted: live.encrypted_label(&session.plan, c),
                     calls: live.calls[c],
                     last_heard: live.last_heard[c].clone(),
                     skipped: controls.skipped(c),

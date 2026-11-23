@@ -789,10 +789,11 @@ impl ScannerView {
         let priority = session.controls.priority(c);
         let recorded = session.controls.recorded(c);
         let (open, playing) = (live.open[c], live.playing == Some(c));
+        let encrypted = live.encrypted_label(&session.plan, c);
         let level = (live.levels[c] / METER_FULL_DB).clamp(0.0, 1.0);
         let color = if playing {
             theme().accent
-        } else if open {
+        } else if open || encrypted.is_some() {
             theme().text
         } else {
             theme().muted
@@ -809,6 +810,8 @@ impl ScannerView {
             .when(skipped, |row| row.opacity(0.4))
             .child(div().flex_none().size_2().rounded_full().bg(rgb(if open {
                 theme().accent
+            } else if encrypted.is_some() {
+                theme().hold
             } else {
                 theme().border
             })))
@@ -834,6 +837,20 @@ impl ScannerView {
                         .truncate()
                         .text_color(rgb(theme().muted))
                         .child(e.desc.clone()),
+                )
+            })
+            // Traffic that can't be listened to: shown, never played.
+            .when_some(encrypted, |row, label| {
+                row.child(
+                    div()
+                        .flex_none()
+                        .px_1()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(rgb(theme().hold))
+                        .text_xs()
+                        .text_color(rgb(theme().hold))
+                        .child(label),
                 )
             })
             .child(
@@ -940,7 +957,7 @@ impl ScannerView {
     /// Whether the filter lets a channel be shown.
     fn shows_channel(&self, c: usize, session: &Session, live: &Live) -> bool {
         let e = &session.plan.entries[c];
-        (!self.filter.active_only || live.open[c])
+        (!self.filter.active_only || live.open[c] || live.encrypted[c].is_some())
             && (!self.filter.heard_only || live.calls[c] > 0)
             && self.filter.matches(&format!("{} {} {}", e.id(), e.tag, e.desc))
     }

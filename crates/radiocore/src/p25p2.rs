@@ -113,6 +113,9 @@ fn scrambling(wacn: u32, system: u16, nac: u16) -> Vec<u8> {
 pub enum P25p2Frame {
     /// Decoded speech at 8 kHz from one of the channel's two conversations.
     Voice { slot: u8, pcm: Vec<i16> },
+    /// A burst of speech from an encrypted conversation, which isn't
+    /// decoded.
+    Encrypted { slot: u8 },
     /// That conversation ended.
     End { slot: u8 },
 }
@@ -122,6 +125,8 @@ struct Conversation {
     vocoder: Vocoder,
     /// Whether it is unencrypted, once a burst has said.
     clear: Option<bool>,
+    /// It said so with a cipher's number: see [`crate::p25::is_cipher`].
+    cipher: bool,
     /// The next 4V burst starts the encryption details, which begin with
     /// the algorithm: it follows a 2V burst.
     details_next: bool,
@@ -137,6 +142,7 @@ impl Conversation {
         Self {
             vocoder: Vocoder::new(Rate::HalfRate3600x2450),
             clear: None,
+            cipher: false,
             details_next: false,
             pending: Vec::new(),
             in_call: false,
@@ -151,6 +157,7 @@ impl Conversation {
         }
         self.in_call = false;
         self.clear = None;
+        self.cipher = false;
         self.details_next = false;
         self.pending.clear();
         self.vocoder.reset();
@@ -443,11 +450,15 @@ impl P25p2Channel {
             });
             // Exactly: the commonest ciphers' numbers are one bit from it.
             conversation.clear = Some(algid == ALGID_CLEAR);
+            conversation.cipher = crate::p25::is_cipher(algid);
         }
         conversation.details_next = kind == Burst::Voice2;
 
         if conversation.clear == Some(false) {
             conversation.pending.clear();
+            if conversation.cipher {
+                sink(P25p2Frame::Encrypted { slot: slot as u8 });
+            }
             return;
         }
         let frames = if kind == Burst::Voice4 { 4 } else { 2 };
@@ -545,18 +556,25 @@ mod tests {
 
     /// Bursts of speech received from each of the two conversations.
     fn receive(iq: &[Complex32], identity: (u32, u16, u16)) -> [usize; 2] {
+        receive_all(iq, identity).0
+    }
+
+    /// Bursts of speech heard, and of encrypted speech, in each slot.
+    fn receive_all(iq: &[Complex32], identity: (u32, u16, u16)) -> ([usize; 2], [usize; 2]) {
         let mut channel = P25p2Channel::new();
         channel.set_identity(identity.0, identity.1, identity.2);
-        let mut heard = [0; 2];
+        let (mut heard, mut encrypted) = ([0; 2], [0; 2]);
         for block in iq.chunks(48) {
-            channel.process(block, |frame| {
-                if let P25p2Frame::Voice { slot, pcm } = frame {
+            channel.process(block, |frame| match frame {
+                P25p2Frame::Voice { slot, pcm } => {
                     assert_eq!(pcm.len() % FRAME_SAMPLES, 0);
                     heard[usize::from(slot)] += 1;
                 }
+                P25p2Frame::Encrypted { slot } => encrypted[usize::from(slot)] += 1,
+                P25p2Frame::End { .. } => {}
             });
         }
-        heard
+        (heard, encrypted)
     }
 
     const IDENTITY: (u32, u16, u16) = (0x92762, 0x338, 0x028);
@@ -572,13 +590,13 @@ mod tests {
 
     #[test]
     fn stays_silent_on_encrypted_calls_and_other_systems() {
-        // AES.
-        assert_eq!(receive(&transmit(4, IDENTITY, 0x84), IDENTITY), [0, 0]);
+        // AES: nothing is played, but the calls are known to be there.
+        let (heard, encrypted) = receive_all(&transmit(4, IDENTITY, 0x84), IDENTITY);
+        assert_eq!(heard, [0, 0]);
+        assert!(encrypted[0] > 0 && encrypted[1] > 0, "{encrypted:?}");
         // Another site's scrambling.
-        assert_eq!(
-            receive(&transmit(4, IDENTITY, ALGID_CLEAR), (0x92762, 0x338, 0x029)),
-            [0, 0]
-        );
+        let iq = transmit(4, IDENTITY, ALGID_CLEAR);
+        assert_eq!(receive_all(&iq, (0x92762, 0x338, 0x029)), ([0, 0], [0, 0]));
     }
 
     #[test]
